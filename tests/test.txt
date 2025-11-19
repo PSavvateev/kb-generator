@@ -1,0 +1,16 @@
+Sample Test Document
+
+This is a test document for the DocumentParser class.
+
+Key Features:
+- Multiple paragraphs
+- Various formatting
+- Sample content for testing
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. 
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+
+Testing special characters: @#$%^&*()
+Testing numbers: 123456789
+
+End of test document.
