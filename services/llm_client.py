@@ -132,7 +132,7 @@ class LLMClient:
         env_vars = {
             LLMProvider.OPENAI: "OPENAI_API_KEY",
             LLMProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
-            LLMProvider.GOOGLE: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],  # Both supported
+            LLMProvider.GOOGLE: "GOOGLE_API_KEY",  
             LLMProvider.OLLAMA: None  # Ollama doesn't need API key
         }
         
