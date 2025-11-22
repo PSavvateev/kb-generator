@@ -13,7 +13,7 @@
 - [Workflow](#workflow)
 - [Architecture](#architecture)
 - [Setup](#setup)
-- [Configuration](#configuration) ⭐ NEW
+- [Configuration](#configuration) 
 - [Usage](#usage)
 - [Output Files](#output-files)
 - [Troubleshooting](#troubleshooting)
@@ -238,7 +238,7 @@ kb-generator/
 ├── pipeline.py              # Main CLI entry point
 ├── config.py                # Configuration system
 ├── requirements.txt         # Python dependencies
-├── .env                     # API keys (not in git)
+├── .env                     # API keys 
 ├── .env.example            # Example environment file
 │
 ├── services/                # Core service modules
@@ -254,13 +254,13 @@ kb-generator/
 │   └── <document-name>/
 │       ├── article.md               # Final article
 │       ├── article_metadata.json   # Metadata
-│       ├── article_plan.json       # Content plan (optional)
-│       └── article_parsed.json     # Parsed document (optional)
+│       ├── article_plan.json       # Content plan 
+│       └── article_parsed.json     # Parsed document 
 │
 ├── logs/                    # Execution logs (auto-created)
 │   └── pipeline_YYYYMMDD_HHMMSS.log
 │
-└── README.md               # This file
+└── README.md               
 ```
 
 ---
