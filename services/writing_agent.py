@@ -27,38 +27,14 @@ Output:
 
 import json
 import logging
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from typing import Dict, List, Optional
 
-from .llm_client import LLMClient
-from .analysis_agent import ContentPlan, Section, TablePlacement
+from services.llm_client import LLMClient
+from services.models import ContentPlan, KBArticle
+from config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
-
-# ============================================================================
-# Data Models
-# ============================================================================
-
-@dataclass
-class KBArticle:
-    """Knowledge Base article output"""
-    title: str
-    content: str  # Full markdown content
-    metadata: Dict[str, Any]
-    word_count: int
-    estimated_reading_time: str
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            "title": self.title,
-            "content": self.content,
-            "metadata": self.metadata,
-            "word_count": self.word_count,
-            "estimated_reading_time": self.estimated_reading_time
-        }
-    
 
 # ============================================================================
 # Writing Agent
@@ -121,32 +97,38 @@ class WritingAgent:
     def __init__(
         self,
         llm_client: LLMClient,
-        max_retries: int = 3,
-        verbose: bool = False
+        config: PipelineConfig
     ):
         """
         Initialize Writing Agent
         
         Args:
             llm_client: LLM client for generating content
-            max_retries: Maximum retry attempts
-            verbose: Enable verbose logging
+            config: Pipeline configuration
         """
         self.llm = llm_client
-        self.max_retries = max_retries
-        self.verbose = verbose
+        self.config = config
         
-        if verbose:
+        # Get settings from config
+        self.max_retries = config.llm.max_retries
+        self.verbose = config.verbose
+        
+        # Agent-specific settings
+        self.tone = config.agent.writing_tone
+        self.include_examples = config.agent.writing_include_examples
+        self.max_section_length = config.agent.writing_max_section_length
+        self.include_source = config.output.include_source_attribution
+        
+        if self.verbose:
             logger.setLevel(logging.DEBUG)
         
-        logger.info(f"Initialized WritingAgent with {llm_client.provider} provider")
-
+        logger.info(f"Initialized WritingAgent with {llm_client.provider.value} provider")
 
     def write(
         self,
         content_plan: ContentPlan,
         parsed_result: Dict,
-        include_source_attribution: bool = True
+        include_source_attribution: Optional[bool] = None
     ) -> KBArticle:
         """
         Main writing method - generates KB article
@@ -160,6 +142,9 @@ class WritingAgent:
             KBArticle: Complete formatted article
         """
         logger.info("Starting article generation")
+
+        if include_source_attribution is None:
+            include_source_attribution = self.include_source
         
         # Validate inputs
         self._validate_inputs(content_plan, parsed_result)
@@ -420,33 +405,18 @@ class WritingAgent:
 # Utility Functions
 # ============================================================================
 
-def create_writing_agent(
-    provider: str = 'openai',
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    verbose: bool = False
-) -> WritingAgent:
+def create_writing_agent(config: PipelineConfig) -> WritingAgent:
     """
-    Convenience function to create WritingAgent with LLM client
+    Convenience function to create WritingAgent with config
     
     Args:
-        provider: LLM provider ('openai', 'anthropic', 'google', 'ollama')
-        model: Model name (uses default if None)
-        api_key: API key (uses env var if None)
-        verbose: Enable verbose logging
+        config: Pipeline configuration
     
     Returns:
         Configured WritingAgent
     """
-    llm_client = LLMClient(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        temperature=0.3  # Lower temperature for factual writing
-    )
-    
-    return WritingAgent(llm_client, verbose=verbose)
-
+    llm_client = LLMClient(config=config.llm)
+    return WritingAgent(llm_client, config)
 
 # ============================================================================
 # Example Usage
@@ -459,13 +429,15 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    print("=" * 70)
-    print("WRITING AGENT - Example Usage")
-    print("=" * 70)
     print("\nTo use this agent:")
-    print("1. Create agent: agent = create_writing_agent(provider='openai')")
-    print("2. Get content_plan from Analysis Agent")
-    print("3. Get parsed_result from Document Parser")
-    print("4. Generate article: article = agent.write(content_plan, parsed_result)")
-    print("5. Save article: agent.save_article(article, 'output.md')")
-    print("\nSee analysis_agent.py for complete pipeline example")
+    print("1. Create config: config = PipelineConfig()")
+    print("2. Create agent: agent = create_writing_agent(config)")
+    print("3. Get content_plan from Analysis Agent")
+    print("4. Get parsed_result from Document Parser")
+    print("5. Generate article: article = agent.write(content_plan, parsed_result)")
+    print("6. Save article: agent.save_article(article, 'output.md')")
+    print("\nExample:")
+    print("  from config import PipelineConfig, LLMProvider")
+    print("  config = PipelineConfig()")
+    print("  config.llm.provider = LLMProvider.GOOGLE")
+    print("  agent = create_writing_agent(config)")

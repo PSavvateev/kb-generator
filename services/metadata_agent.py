@@ -29,129 +29,23 @@ Output:
 
 import json
 import logging
-from typing import Dict, List, Optional, Any, Set
-from dataclasses import dataclass, field
+from typing import Dict, Optional
 from datetime import datetime
-from enum import Enum
+
 
 from services.llm_client import LLMClient
-from services.analysis_agent import ContentPlan
-from services.writing_agent import KBArticle
+from services.models import (
+    ContentPlan,
+    KBArticle,
+    ArticleMetadata,
+    RelatedArticle,
+    DifficultyLevel
+
+)
+from config import PipelineConfig
+
 
 logger = logging.getLogger(__name__)
-
-# ============================================================================
-# Data Models
-# ============================================================================
-
-class DifficultyLevel(str, Enum):
-    """Content difficulty levels"""
-    BEGINNER = "beginner"
-    INTERMEDIATE = "intermediate"
-    ADVANCED = "advanced"
-    EXPERT = "expert"
-
-
-class ContentCategory(str, Enum):
-    """Content categories"""
-    TUTORIAL = "tutorial"
-    GUIDE = "guide"
-    REFERENCE = "reference"
-    CONCEPT = "concept"
-    TROUBLESHOOTING = "troubleshooting"
-    FAQ = "faq"
-    API = "api"
-    BEST_PRACTICES = "best_practices"
-    GETTING_STARTED = "getting_started"
-
-
-@dataclass
-class RelatedArticle:
-    """Related article suggestion"""
-    title: str
-    relevance_reason: str
-    relationship_type: str  # "prerequisite", "follow-up", "related", "alternative"
-
-
-@dataclass
-class ArticleMetadata:
-    """Complete metadata for KB article"""
-    # Core identification
-    title: str
-    slug: str  # URL-friendly version of title
-    
-    # Classification
-    category: str
-    subcategory: Optional[str]
-    tags: List[str]
-    keywords: List[str]
-    
-    # Content characteristics
-    difficulty_level: str
-    estimated_reading_time: str
-    target_audience: str
-    
-    # SEO and discovery
-    meta_description: str
-    search_keywords: List[str]
-    
-    # Relationships
-    prerequisites: List[str]
-    related_articles: List[RelatedArticle]
-    related_topics: List[str]
-    
-    # Technical metadata
-    document_type: str
-    content_format: str  # "markdown", "html", etc.
-    has_code_examples: bool
-    has_tables: bool
-    has_images: bool
-    
-    # Timestamps
-    created_date: str
-    last_updated: str
-    
-    # Additional metadata
-    author: Optional[str] = None
-    version: Optional[str] = None
-    language: str = "en"
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        result = {
-            "title": self.title,
-            "slug": self.slug,
-            "category": self.category,
-            "subcategory": self.subcategory,
-            "tags": self.tags,
-            "keywords": self.keywords,
-            "difficulty_level": self.difficulty_level,
-            "estimated_reading_time": self.estimated_reading_time,
-            "target_audience": self.target_audience,
-            "meta_description": self.meta_description,
-            "search_keywords": self.search_keywords,
-            "prerequisites": self.prerequisites,
-            "related_articles": [
-                {
-                    "title": ra.title,
-                    "relevance_reason": ra.relevance_reason,
-                    "relationship_type": ra.relationship_type
-                }
-                for ra in self.related_articles
-            ],
-            "related_topics": self.related_topics,
-            "document_type": self.document_type,
-            "content_format": self.content_format,
-            "has_code_examples": self.has_code_examples,
-            "has_tables": self.has_tables,
-            "has_images": self.has_images,
-            "created_date": self.created_date,
-            "last_updated": self.last_updated,
-            "author": self.author,
-            "version": self.version,
-            "language": self.language
-        }
-        return result
 
 
 # ============================================================================
@@ -182,7 +76,7 @@ METADATA_EXTRACTION_SCHEMA = {
         },
         "difficulty_level": {
             "type": "string",
-            "enum": ["beginner", "intermediate", "advanced", "expert"],
+            "enum": [dl.value for dl in DifficultyLevel],
             "description": "Content difficulty level"
         },
         "meta_description": {
@@ -247,26 +141,33 @@ class MetadataAgent:
     def __init__(
         self,
         llm_client: LLMClient,
-        max_retries: int = 3,
-        verbose: bool = False
+        config: PipelineConfig
     ):
         """
         Initialize Metadata Agent
         
         Args:
             llm_client: LLM client for generating metadata
-            max_retries: Maximum retry attempts
-            verbose: Enable verbose logging
+            config: Pipeline configuration
         """
         self.llm = llm_client
-        self.max_retries = max_retries
-        self.verbose = verbose
+        self.config = config
         
-        if verbose:
+        # Get settings from config
+        self.max_retries = config.llm.max_retries
+        self.verbose = config.verbose
+        
+        # Agent-specific settings
+        self.generate_seo = config.agent.metadata_generate_seo
+        self.max_tags = config.agent.metadata_max_tags
+        self.max_keywords = config.agent.metadata_max_keywords
+        self.max_related_articles = config.agent.metadata_max_related_articles
+        
+        if self.verbose:
             logger.setLevel(logging.DEBUG)
         
-        logger.info(f"Initialized MetadataAgent with {llm_client.provider} provider")
-    
+        logger.info(f"Initialized MetadataAgent with {llm_client.provider.value} provider")
+
     def generate(
         self,
         article: KBArticle,
@@ -282,13 +183,18 @@ class MetadataAgent:
             article: Generated KB article from Writing Agent
             content_plan: Content plan from Analysis Agent
             parsed_result: Original parsed document
-            author: Optional author name
-            version: Optional version number
+            author: Optional author name (uses config if None)
+            version: Optional version number (uses config if None)
             
         Returns:
             ArticleMetadata: Complete metadata structure
         """
         logger.info("Starting metadata generation")
+        # Use config defaults if not provided
+        if author is None:
+            author = self.config.output.author
+        if version is None:
+            version = self.config.output.version
         
         # Step 1: Extract core metadata (tags, keywords, categories)
         core_metadata = self._extract_core_metadata(article, content_plan)
@@ -379,8 +285,8 @@ Target Audience: {content_plan.target_audience}
 Content Style: {content_plan.content_style}
 
 Generate:
-- tags: 5-10 relevant classification tags
-- keywords: 10-15 search keywords covering main concepts
+- tags: {self.max_tags} relevant classification tags
+- keywords: {self.max_keywords} search keywords covering main concepts
 - category: Primary category (tutorial, guide, reference, concept, troubleshooting, faq, api, best_practices, getting_started)
 - subcategory: More specific subcategory if applicable
 - difficulty_level: beginner, intermediate, advanced, or expert
@@ -675,33 +581,18 @@ Provide in JSON format."""
 # Utility Functions
 # ============================================================================
 
-def create_metadata_agent(
-    provider: str = 'openai',
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    verbose: bool = False
-) -> MetadataAgent:
+def create_metadata_agent(config: PipelineConfig) -> MetadataAgent:
     """
-    Convenience function to create MetadataAgent with LLM client
+    Convenience function to create MetadataAgent with config
     
     Args:
-        provider: LLM provider ('openai', 'anthropic', 'google', 'ollama')
-        model: Model name (uses default if None)
-        api_key: API key (uses env var if None)
-        verbose: Enable verbose logging
+        config: Pipeline configuration
     
     Returns:
         Configured MetadataAgent
     """
-    llm_client = LLMClient(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        temperature=0.3  # Lower temperature for consistent metadata
-    )
-    
-    return MetadataAgent(llm_client, verbose=verbose)
-
+    llm_client = LLMClient(config=config.llm)
+    return MetadataAgent(llm_client, config)
 
 # ============================================================================
 # Example Usage
@@ -721,11 +612,22 @@ if __name__ == "__main__":
     # Example: Create agent
     print("\n1. Creating Metadata Agent...")
     try:
-        agent = create_metadata_agent(
-            provider='openai',
-            model='gpt-4',
-            verbose=True
-        )
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        
+        from config import PipelineConfig, LLMProvider, load_env_file
+        
+        # Load environment
+        load_env_file()
+        
+        # Create config
+        config = PipelineConfig()
+        config.llm.provider = LLMProvider.GOOGLE
+        config.verbose = True
+        
+        # Create agent
+        agent = create_metadata_agent(config)
         print("✅ Agent created successfully")
     except Exception as e:
         print(f"❌ Error creating agent: {e}")
@@ -739,31 +641,41 @@ if __name__ == "__main__":
     print("To use in full pipeline:")
     print("=" * 70)
     print("""
-from document_parser import DocumentParser
-from analysis_agent import create_analysis_agent
-from writing_agent import create_writing_agent
-from metadata_agent import create_metadata_agent
+from config import PipelineConfig, LLMProvider, load_env_file
+from services import (
+    create_analysis_agent,
+    create_writing_agent,
+    create_metadata_agent
+)
+
+# Load environment
+load_env_file()
+
+# Create config
+config = PipelineConfig()
+config.llm.provider = LLMProvider.GOOGLE
+config.output.author = "Your Name"
+config.output.version = "1.0"
 
 # Step 1: Parse document
+from document_parser import DocumentParser
 parser = DocumentParser()
 parsed = parser.parse("document.pdf")
 
 # Step 2: Analyze content
-analyzer = create_analysis_agent(provider='openai')
+analyzer = create_analysis_agent(config)
 content_plan = analyzer.analyze(parsed)
 
 # Step 3: Write article
-writer = create_writing_agent(provider='openai')
+writer = create_writing_agent(config)
 article = writer.write(content_plan, parsed)
 
 # Step 4: Generate metadata
-metadata_gen = create_metadata_agent(provider='openai')
+metadata_gen = create_metadata_agent(config)
 metadata = metadata_gen.generate(
     article=article,
     content_plan=content_plan,
-    parsed_result=parsed,
-    author="Your Name",
-    version="1.0"
+    parsed_result=parsed
 )
 
 # Save everything
@@ -773,8 +685,7 @@ metadata_gen.save_metadata(metadata, "metadata.json")
 # Generate frontmatter
 frontmatter = metadata_gen.generate_frontmatter(metadata)
 print(frontmatter)
-    """)
-    
+""")
     print("\n" + "=" * 70)
     print("Example completed!")
     print("=" * 70)

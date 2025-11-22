@@ -6,6 +6,21 @@
 
 ---
 
+## Table of Contents
+
+- [Purpose](#purpose)
+- [Functionality](#functionality)
+- [Workflow](#workflow)
+- [Architecture](#architecture)
+- [Setup](#setup)
+- [Configuration](#configuration) ⭐ NEW
+- [Usage](#usage)
+- [Output Files](#output-files)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+---
+
 ## Purpose
 
 Well-structured *knowledge base* is one of the key elements of customer service systems, used not only by support agents, but also for customer-facing automatic self-service and further AI-automations as chat bots and agent assists. 
@@ -13,7 +28,6 @@ Well-structured *knowledge base* is one of the key elements of customer service 
 It is common for a company to have a large knowledge base documented in different formats incoherently as a legacy of inconsistent creation approach. 
 
 **KB Generator** automates the creation of knowledge base articles from various document formats. It analyzes document content, extracts structured information, generates markdown-format articles with proper formatting, and creates rich metadata for further LLM usage (RAG agents or chat bots).
-
 
 ### Key benefits
 - **Save Time**: Convert hours of manual KB article writing into minutes of automated processing
@@ -65,7 +79,6 @@ It is common for a company to have a large knowledge base documented in differen
 ---
 
 ## Workflow
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        KB GENERATOR PIPELINE                    │
@@ -128,7 +141,7 @@ It is common for a company to have a large knowledge base documented in differen
 
 ---
 
-## Architechture
+## Architecture
 
 ### Components
 
@@ -214,23 +227,23 @@ Unified interface for multiple AI providers.
 - Manage rate limits
 
 **Supported Providers:**
-- **Google Gemini** (gemini-1.5-flash, gemini-1.5-pro)
+- **Google Gemini** (gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash-exp)
 - **OpenAI** (gpt-4o, gpt-4o-mini, o1-mini, o1-preview)
-- **Anthropic Claude** (claude-3-5-sonnet, claude-3-5-haiku, claude-3-opus)
+- **Anthropic Claude** (claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022, claude-3-opus)
 - **Ollama** (local models: llama3.1, qwen2.5, mistral, etc.)
 
 ### Project structure
-
 ```
 kb-generator/
 ├── pipeline.py              # Main CLI entry point
-├── config.py                # Configuration dataclasses
+├── config.py                # Configuration system
 ├── requirements.txt         # Python dependencies
 ├── .env                     # API keys (not in git)
 ├── .env.example            # Example environment file
 │
 ├── services/                # Core service modules
 │   ├── __init__.py
+│   ├── models.py           # Data models and domain enums
 │   ├── document_parser.py  # Document parsing & table extraction
 │   ├── analysis_agent.py   # Content analysis & planning
 │   ├── writing_agent.py    # Article generation
@@ -241,8 +254,8 @@ kb-generator/
 │   └── <document-name>/
 │       ├── article.md               # Final article
 │       ├── article_metadata.json   # Metadata
-│       ├── article_plan.json       # Content plan
-│       └── article_parsed.json     # Parsed document
+│       ├── article_plan.json       # Content plan (optional)
+│       └── article_parsed.json     # Parsed document (optional)
 │
 ├── logs/                    # Execution logs (auto-created)
 │   └── pipeline_YYYYMMDD_HHMMSS.log
@@ -266,14 +279,12 @@ kb-generator/
 ### Installation steps
 
 #### 1. Clone the repository
-
 ```bash
-git clone 
+git clone https://github.com/yourusername/kb-generator.git
 cd kb-generator
 ```
 
 #### 2. Create virtual environment
-
 ```bash
 # Create virtual environment
 python -m venv venv
@@ -287,7 +298,6 @@ source venv/bin/activate
 ```
 
 #### 3. Install dependencies
-
 ```bash
 pip install -r requirements.txt
 ```
@@ -295,7 +305,6 @@ pip install -r requirements.txt
 #### 4. Configure API keys
 
 Create a `.env` file in the project root:
-
 ```bash
 # Copy example file
 cp .env.example .env
@@ -304,7 +313,6 @@ cp .env.example .env
 ```
 
 **`.env` file format:**
-
 ```env
 # Choose your preferred provider and add the corresponding API key
 
@@ -322,7 +330,6 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ```
 
 #### 5. Verify installation
-
 ```bash
 python pipeline.py --help
 ```
@@ -331,12 +338,287 @@ You should see the help message with available options.
 
 ---
 
+## Configuration
+
+KB Generator uses a centralized configuration system for maximum flexibility and control. All settings are defined in `config.py` and can be customized programmatically or via command-line arguments.
+
+### Quick Configuration
+
+#### Via Command Line (Easiest)
+```bash
+# Basic usage with defaults
+python pipeline.py document.pdf
+
+# Specify provider and model
+python pipeline.py document.pdf --provider anthropic --model claude-3-5-sonnet-20241022
+
+# Custom output and metadata
+python pipeline.py document.pdf --output my-kb --author "Jane Smith" --version "2.0"
+
+# Control what gets saved
+python pipeline.py document.pdf --no-plan --no-attribution
+```
+
+#### Via Python API (Most Flexible)
+```python
+from config import PipelineConfig, LLMProvider, load_env_file
+from pipeline import KBPipeline
+
+# Load environment variables
+load_env_file()
+
+# Create and customize configuration
+config = PipelineConfig()
+config.llm.provider = LLMProvider.GOOGLE
+config.llm.model = "gemini-1.5-flash"
+config.output.output_dir = "my-kb"
+config.output.author = "Your Name"
+config.verbose = True
+
+# Create and use pipeline
+pipeline = KBPipeline(config)
+result = pipeline.process_document("document.pdf")
+```
+
+---
+
+### Configuration Sections
+
+#### 1. LLM Configuration
+
+Control which AI provider and model to use:
+```python
+# Set provider
+config.llm.provider = LLMProvider.GOOGLE  # or OPENAI, ANTHROPIC, OLLAMA
+
+# Optionally specify model (uses smart defaults if not set)
+config.llm.model = "gemini-1.5-flash"
+
+# Control generation parameters
+config.llm.temperature = 0.7        # Creativity (0.0-1.0)
+config.llm.max_tokens = 4000        # Max response length
+config.llm.timeout = 120            # API timeout (seconds)
+config.llm.max_retries = 3          # Retry failed requests
+```
+
+**Supported Providers & Default Models:**
+
+| Provider | Default Model | Best For |
+|----------|---------------|----------|
+| **Google** | `gemini-1.5-flash` | Speed & cost-effectiveness |
+| **OpenAI** | `gpt-4o-mini` | Quality & reliability |
+| **Anthropic** | `claude-3-5-haiku-20241022` | Best quality output |
+| **Ollama** | `llama3.1:8b` | Local/offline processing |
+
+**Temperature Guidelines:**
+- `0.2-0.3` - Structured output (metadata generation)
+- `0.5-0.7` - Balanced (article writing) 
+- `0.8-1.0` - Creative content
+
+---
+
+#### 2. Output Configuration
+
+Control where and how files are generated:
+```python
+# Basic output settings
+config.output.output_dir = "outputs"         # Output directory
+config.output.create_subdirs = True          # Create folder per document
+config.output.use_slug = True                # URL-friendly filenames
+
+# Control which files to generate
+config.output.generate_markdown = True       # Article (always True)
+config.output.generate_metadata = True       # Metadata JSON
+config.output.generate_plan = True           # Content plan JSON
+config.output.generate_parsed = True         # Parsed document JSON
+
+# Markdown options
+config.output.include_frontmatter = True     # YAML frontmatter
+config.output.include_source_attribution = True  # Source citation
+config.output.markdown_style = "standard"    # or "obsidian"
+
+# Article metadata
+config.output.author = "Your Name"           # Author name
+config.output.version = "1.0"                # Version number
+```
+
+**Output Structure:**
+```
+outputs/
+└── document-name/
+    ├── article-slug.md              # KB article
+    ├── article-slug_metadata.json   # Metadata
+    ├── article-slug_plan.json       # Content plan (if enabled)
+    └── article-slug_parsed.json     # Parsed data (if enabled)
+```
+
+---
+
+#### 3. Agent Configuration
+
+Fine-tune agent behavior:
+```python
+# Analysis Agent
+config.agent.analysis_extract_key_takeaways = True
+config.agent.analysis_identify_prerequisites = True
+config.agent.analysis_suggest_related_articles = True
+
+# Writing Agent
+config.agent.writing_tone = "professional"   # or "casual", "technical"
+config.agent.writing_include_examples = True
+config.agent.writing_max_section_length = 500  # words per section
+
+# Metadata Agent
+config.agent.metadata_generate_seo = True
+config.agent.metadata_max_tags = 10
+config.agent.metadata_max_keywords = 15
+config.agent.metadata_max_related_articles = 8
+```
+
+---
+
+#### 4. Parser Configuration
+
+Control document parsing:
+```python
+# File size limits
+config.parser.max_file_size = 100 * 1024 * 1024  # 100MB
+
+# Table extraction
+config.parser.extract_tables = True
+config.parser.tables_as_markdown = True
+config.parser.strict_table_validation = True
+
+# Table validation thresholds
+config.parser.min_table_rows = 2
+config.parser.min_table_cols = 2
+config.parser.max_empty_cell_ratio = 0.6  # Max 60% empty cells
+```
+
+---
+
+### Preset Configurations
+
+Use pre-configured setups for common scenarios:
+```python
+from config import (
+    get_production_config,    # Google Gemini - fast & cost-effective
+    get_quality_config,       # Claude Sonnet - best quality
+    get_development_config,   # Ollama - local testing
+    get_fast_config           # Gemini Flash - quick testing
+)
+
+# Use a preset
+config = get_production_config()
+pipeline = KBPipeline(config)
+```
+
+---
+
+### Complete Configuration Example
+```python
+from config import PipelineConfig, LLMProvider, load_env_file
+from pipeline import KBPipeline
+
+# Load environment
+load_env_file()
+
+# Create configuration
+config = PipelineConfig()
+
+# LLM settings
+config.llm.provider = LLMProvider.ANTHROPIC
+config.llm.model = "claude-3-5-sonnet-20241022"
+config.llm.temperature = 0.7
+
+# Output settings
+config.output.output_dir = "knowledge-base"
+config.output.author = "Documentation Team"
+config.output.version = "2.0"
+config.output.generate_plan = True
+config.output.generate_parsed = False
+
+# Agent settings
+config.agent.writing_tone = "professional"
+config.agent.metadata_max_tags = 15
+
+# Parser settings
+config.parser.strict_table_validation = True
+
+# Pipeline settings
+config.verbose = True
+
+# Validate and use
+config.validate()
+pipeline = KBPipeline(config)
+result = pipeline.process_document("guide.pdf")
+
+if result.success:
+    print(f"✓ Article: {result.article_path}")
+    print(f"✓ Metadata: {result.metadata_path}")
+```
+
+---
+
+### View Current Configuration
+```python
+from config import print_config
+
+# Pretty-print configuration
+print_config(config)
+```
+
+**Output:**
+```
+======================================================================
+KB GENERATOR CONFIGURATION
+======================================================================
+
+📊 LLM Configuration:
+  Provider: anthropic
+  Model: claude-3-5-sonnet-20241022
+  Temperature: 0.7
+  Max Retries: 3
+
+📄 Parser Configuration:
+  Max File Size: 100 MB
+  Extract Tables: True
+  Strict Validation: True
+
+💾 Output Configuration:
+  Output Directory: knowledge-base
+  Author: Documentation Team
+  Version: 2.0
+
+🤖 Agent Configuration:
+  Writing Tone: professional
+  Max Tags: 15
+
+======================================================================
+```
+
+---
+
+### Configuration Reference
+
+| Setting | Default | Options | Description |
+|---------|---------|---------|-------------|
+| `llm.provider` | `GOOGLE` | `GOOGLE`, `OPENAI`, `ANTHROPIC`, `OLLAMA` | LLM provider |
+| `llm.temperature` | `0.7` | `0.0-1.0` | Generation creativity |
+| `output.output_dir` | `outputs` | Any path | Output directory |
+| `output.author` | `None` | Any string | Article author |
+| `agent.writing_tone` | `professional` | `professional`, `casual`, `technical` | Writing style |
+| `parser.extract_tables` | `True` | `True`, `False` | Extract tables |
+
+For complete configuration options, see `config.py`.
+
+---
+
 ## Usage
 
 ### Basic usage
 
 Generate a KB article from a single document:
-
 ```bash
 python pipeline.py path/to/document.pdf
 ```
@@ -351,7 +633,6 @@ This will:
 ### Specify LLM provider
 
 #### Using Google Gemini (default, recommended)
-
 ```bash
 python pipeline.py document.pdf --provider google
 
@@ -360,7 +641,6 @@ python pipeline.py document.pdf --provider google --model gemini-1.5-pro
 ```
 
 #### Using OpenAI
-
 ```bash
 python pipeline.py document.pdf --provider openai
 
@@ -369,7 +649,6 @@ python pipeline.py document.pdf --provider openai --model gpt-4o
 ```
 
 #### Using Anthropic Claude
-
 ```bash
 python pipeline.py document.pdf --provider anthropic
 
@@ -378,7 +657,6 @@ python pipeline.py document.pdf --provider anthropic --model claude-3-5-sonnet-2
 ```
 
 #### Using Ollama (local)
-
 ```bash
 # First, install Ollama and pull a model
 ollama pull llama3.1:8b
@@ -393,52 +671,47 @@ python pipeline.py document.pdf --provider ollama --model llama3.1:8b
 - `mistral:7b` - Fast and reliable
 
 ### Custom output directory
-
 ```bash
-python pipeline.py document.pdf --output-dir my-articles
+python pipeline.py document.pdf --output my-articles
 ```
 
 ### Process multiple documents
 
 Process all documents in a directory:
-
 ```bash
 python pipeline.py documents/ --directory
 ```
 
-Process specific file types:
-
+Process with recursion:
 ```bash
-python pipeline.py documents/ --directory --pattern "*.pdf"
+python pipeline.py documents/ --directory --recursive
+```
+
+Process specific file types:
+```bash
+python pipeline.py documents/ --directory --extensions .pdf .docx
 ```
 
 ### Advanced options
-
 ```bash
-# Disable source attribution in articles
-python pipeline.py document.pdf --no-source-attribution
+# Control output files
+python pipeline.py document.pdf --no-plan          # Don't save content plan
+python pipeline.py document.pdf --no-attribution   # Don't include source
 
-# Use custom author name
-python pipeline.py document.pdf --author "John Doe"
-
-# Set custom version
-python pipeline.py document.pdf --version "2.0"
+# Set metadata
+python pipeline.py document.pdf --author "John Doe" --version "2.0"
 
 # Verbose logging
 python pipeline.py document.pdf --verbose
-
-# Dry run (parse only, no generation)
-python pipeline.py document.pdf --dry-run
 ```
 
 ### Complete example
-
 ```bash
 python pipeline.py \
   solution-brief.pdf \
   --provider google \
   --model gemini-1.5-flash \
-  --output-dir kb-articles \
+  --output kb-articles \
   --author "Documentation Team" \
   --version "1.0" \
   --verbose
@@ -458,38 +731,64 @@ The final knowledge base article in markdown format with:
 - Professional tone
 - Source attribution (optional)
 
+**Example:**
+```markdown
+---
+title: Getting Started with Python Flask
+slug: getting-started-with-python-flask
+category: tutorial
+difficulty: beginner
+tags:
+  - python
+  - flask
+  - web-development
+---
+
+# Getting Started with Python Flask
+
+Flask is a lightweight web framework...
+```
+
 ### 2. **Metadata JSON** (`<slug>_metadata.json`)
 Comprehensive metadata including:
 ```json
 {
-  "title": "Article Title",
-  "slug": "article-slug",
+  "title": "Getting Started with Python Flask",
+  "slug": "getting-started-with-python-flask",
   "category": "tutorial",
   "subcategory": "getting-started",
-  "tags": ["tag1", "tag2"],
-  "keywords": ["keyword1", "keyword2"],
+  "tags": ["python", "flask", "web-development"],
+  "keywords": ["python", "flask", "web framework"],
   "difficulty_level": "beginner",
   "estimated_reading_time": "5 minutes",
-  "target_audience": "Description...",
-  "meta_description": "SEO description...",
-  "prerequisites": ["prerequisite1"],
+  "target_audience": "Python developers new to Flask",
+  "meta_description": "Learn how to get started...",
+  "prerequisites": ["Basic Python knowledge"],
   "related_articles": [...]
 }
 ```
 
-### 3. **Content plan JSON** (`<slug>_plan.json`)
+### 3. **Content plan JSON** (`<slug>_plan.json`) *(optional)*
 The analysis and structure plan:
 ```json
 {
   "document_type": "tutorial",
-  "main_topic": "Topic description",
-  "sections": [...],
-  "table_placements": [...],
+  "main_topic": "Getting started with Flask",
+  "sections": [
+    {
+      "title": "Prerequisites",
+      "level": 2,
+      "summary": "Required knowledge...",
+      "content_elements": ["bullet_list"],
+      "estimated_length": "short"
+    }
+  ],
+  "table_placements": [],
   "key_takeaways": [...]
 }
 ```
 
-### 4. **Parsed document JSON** (`<slug>_parsed.json`)
+### 4. **Parsed document JSON** (`<slug>_parsed.json`) *(optional)*
 Raw parsed data from the document:
 ```json
 {
@@ -510,40 +809,95 @@ Raw parsed data from the document:
 ### Common issues
 
 #### 1. **"No API key found"**
-**Solution:** Ensure you've created a `.env` file with the correct API key for your provider.
+**Error:**
+```
+Error: API key required for google. Set it in .env file or pass via config.
+```
 
+**Solution:** Ensure you've created a `.env` file with the correct API key for your provider.
 ```bash
 # Check if .env exists
 ls -la .env
 
 # Verify content
 cat .env
+
+# Should contain:
+GOOGLE_API_KEY=your_actual_api_key_here
 ```
 
-#### 2. **"Failed to parse JSON response"**
+#### 2. **Import errors**
+**Error:**
+```
+ImportError: attempted relative import beyond top-level package
+```
+
+**Solution:** Run the pipeline from the project root directory:
+```bash
+cd kb-generator
+python pipeline.py document.pdf
+```
+
+#### 3. **"Failed to parse JSON response"**
 **Solution:** 
 - For Ollama: Use recommended models like `qwen2.5:7b` or `llama3.1:8b`
 - For cloud providers: Usually a temporary issue, retry the command
 - Check logs in `logs/` directory for details
+- Try lowering temperature: `--temperature 0.3`
 
-#### 3. **"Table extraction failed"**
+#### 4. **"Table extraction failed"**
 **Solution:** The PDF might have complex formatting. The strict table validation will filter out malformed tables. Check `_parsed.json` to see what was extracted.
 
-#### 4. **"Module not found" errors**
-**Solution:** Ensure all dependencies are installed:
+To disable strict validation:
+```python
+config = PipelineConfig()
+config.parser.strict_table_validation = False
+```
 
+#### 5. **"Module not found" errors**
+**Solution:** Ensure all dependencies are installed:
 ```bash
 pip install -r requirements.txt --upgrade
 ```
 
-#### 5. **Ollama models produce poor output**
+#### 6. **Ollama models produce poor output**
 **Solution:** 
 - Ensure you're using a model with good JSON capabilities
 - Increase the model size (e.g., use 8b instead of 3b)
+- Try `qwen2.5:7b` for best structured output
 - Consider switching to cloud providers for production use
 
-#### 6. **Output markdown looks wrong in Obsidian**
-**Solution:** Obsidian has different markdown rendering. The markdown is correct for standard parsers (GitHub, VS Code). Future versions may include Obsidian-specific formatting.
+#### 7. **Rate limiting / 503 errors**
+**Solution:**
+- The pipeline automatically retries with exponential backoff
+- For persistent issues, wait a few minutes and retry
+- Consider using a different provider temporarily
+
+#### 8. **Configuration not applying**
+**Solution:**
+- Ensure you're passing the config to the pipeline:
+```python
+  pipeline = KBPipeline(config)  # ✅ Correct
+  pipeline = KBPipeline()        # ❌ Uses defaults
+```
+- Use `print_config(config)` to verify settings
+- Check that `.env` file is loaded: `load_env_file()`
+
+---
+
+
+### Development Setup
+```bash
+# Clone and setup
+git clone https://github.com/yourusername/kb-generator.git
+cd kb-generator
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Make changes and test
+python pipeline.py test-document.pdf --verbose
+```
 
 ---
 
@@ -552,10 +906,3 @@ pip install -r requirements.txt --upgrade
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
-
-
-
-
-
-
-

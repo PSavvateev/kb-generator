@@ -1,4 +1,3 @@
-# analysis_agent.py
 """
 Agent #1: Analysis Agent for KB Generation Pipeline
 
@@ -19,104 +18,13 @@ Output: Content plan (JSON structure for writing agent)
 
 import json
 import logging
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
-from enum import Enum
+from typing import Dict, List
 
-from .llm_client import LLMClient
+from services.llm_client import LLMClient
+from services.models import ContentPlan, Section, TablePlacement, DocumentType
+from config import PipelineConfig
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# Data Models
-# ============================================================================
-
-class DocumentType(str, Enum):
-    """Types of documents that can be analyzed"""
-    TUTORIAL = "tutorial"
-    HOW_TO = "how_to"
-    REFERENCE = "reference"
-    CONCEPT = "concept"
-    TROUBLESHOOTING = "troubleshooting"
-    FAQ = "faq"
-    API_DOCS = "api_documentation"
-    GENERAL = "general"
-
-
-class ContentElementType(str, Enum):
-    """Types of content elements in the document"""
-    PARAGRAPH = "paragraph"
-    BULLET_LIST = "bullet_list"
-    NUMBERED_LIST = "numbered_list"
-    CODE_BLOCK = "code_block"
-    TABLE = "table"
-    IMAGE = "image"
-    QUOTE = "quote"
-    CALLOUT = "callout"
-    HEADING = "heading"
-
-
-@dataclass
-class Section:
-    """Represents a section in the content plan"""
-    title: str
-    level: int  # 1 = H1, 2 = H2, etc.
-    summary: str
-    content_elements: List[str]  # Types of elements in this section
-    estimated_length: str  # "short", "medium", "long"
-    subsections: Optional[List['Section']] = None
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        result = {
-            "title": self.title,
-            "level": self.level,
-            "summary": self.summary,
-            "content_elements": self.content_elements,
-            "estimated_length": self.estimated_length
-        }
-        if self.subsections:
-            result["subsections"] = [sub.to_dict() for sub in self.subsections]
-        return result
-
-
-@dataclass
-class TablePlacement:
-    """Placement information for a table"""
-    table_index: int
-    section_title: str
-    placement_reason: str
-    should_be_inline: bool
-    formatting_notes: str
-
-
-@dataclass
-class ContentPlan:
-    """Complete content plan for the document"""
-    document_type: str
-    main_topic: str
-    target_audience: str
-    estimated_reading_time: str
-    key_takeaways: List[str]
-    sections: List[Section]
-    table_placements: List[TablePlacement]
-    content_style: str  # "technical", "beginner-friendly", "formal", etc.
-    special_instructions: List[str]
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            "document_type": self.document_type,
-            "main_topic": self.main_topic,
-            "target_audience": self.target_audience,
-            "estimated_reading_time": self.estimated_reading_time,
-            "key_takeaways": self.key_takeaways,
-            "sections": [section.to_dict() for section in self.sections],
-            "table_placements": [asdict(tp) for tp in self.table_placements],
-            "content_style": self.content_style,
-            "special_instructions": self.special_instructions
-        }
 
 
 # ============================================================================
@@ -129,7 +37,7 @@ DOCUMENT_ANALYSIS_SCHEMA = {
     "properties": {
         "document_type": {
             "type": "string",
-            "enum": ["tutorial", "how_to", "reference", "concept", "troubleshooting", "faq", "api_documentation", "general"],
+            "enum": [dt.value for dt in DocumentType],
             "description": "Type of document being analyzed"
         },
         "main_topic": {
@@ -220,26 +128,33 @@ class AnalysisAgent:
     def __init__(
         self,
         llm_client: LLMClient,
-        max_retries: int = 3,
-        verbose: bool = False
+        config: PipelineConfig
     ):
         """
         Initialize Analysis Agent
         
         Args:
             llm_client: LLM client for generating analysis
-            max_retries: Maximum retry attempts for LLM calls
-            verbose: Enable verbose logging
+            config: Pipeline configuration
         """
         self.llm = llm_client
-        self.max_retries = max_retries
-        self.verbose = verbose
+        self.config = config
         
-        if verbose:
+        # Get settings from config
+        self.max_retries = config.llm.max_retries
+        self.verbose = config.verbose
+        
+        # Agent-specific settings
+        self.extract_key_takeaways = config.agent.analysis_extract_key_takeaways
+        self.identify_prerequisites = config.agent.analysis_identify_prerequisites
+        self.suggest_related_articles = config.agent.analysis_suggest_related_articles
+        
+        if self.verbose:
             logger.setLevel(logging.DEBUG)
         
-        logger.info(f"Initialized AnalysisAgent with {llm_client.provider} provider")
-    
+        logger.info(f"Initialized AnalysisAgent with {llm_client.provider.value} provider")
+
+
     def analyze(self, parsed_result: Dict) -> ContentPlan:
         """
         Main analysis method - orchestrates the entire analysis process
@@ -657,33 +572,18 @@ Provide placements in JSON format."""
 # Utility Functions
 # ============================================================================
 
-def create_analysis_agent(
-    provider: str = 'openai',
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    verbose: bool = False
-) -> AnalysisAgent:
+def create_analysis_agent(config: PipelineConfig) -> AnalysisAgent:
     """
-    Convenience function to create AnalysisAgent with LLM client
+    Convenience function to create AnalysisAgent with config
     
     Args:
-        provider: LLM provider ('openai', 'anthropic', 'google', 'ollama')
-        model: Model name (uses default if None)
-        api_key: API key (uses env var if None)
-        verbose: Enable verbose logging
+        config: Pipeline configuration
     
     Returns:
         Configured AnalysisAgent
-    """
-    llm_client = LLMClient(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        temperature=0.3  # Lower temperature for more consistent analysis
-    )
-    
-    return AnalysisAgent(llm_client, verbose=verbose)
-
+    """ 
+    llm_client = LLMClient(config=config.llm)
+    return AnalysisAgent(llm_client, config)
 
 # ============================================================================
 # Example Usage
@@ -703,11 +603,19 @@ if __name__ == "__main__":
     # Example: Create agent
     print("\n1. Creating Analysis Agent...")
     try:
-        agent = create_analysis_agent(
-            provider='ollama',  # or 'anthropic', 'google', 'ollama'
-            model='gpt-oss:20b',
-            verbose=True
-        )
+        from ..config import PipelineConfig, LLMProvider, load_env_file
+        
+        # Load environment
+        load_env_file()
+        
+        # Create config
+        config = PipelineConfig()
+        config.llm.provider = LLMProvider.GOOGLE  # or OPENAI, ANTHROPIC, OLLAMA
+        config.llm.model = "gemini-1.5-flash"
+        config.verbose = True
+        
+        # Create agent
+        agent = create_analysis_agent(config)
         print("✅ Agent created successfully")
     except Exception as e:
         print(f"❌ Error creating agent: {e}")

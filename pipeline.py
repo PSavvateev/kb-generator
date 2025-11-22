@@ -24,13 +24,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from config import PipelineConfig, LLMProvider, load_env_file
+from services.models import ContentPlan, KBArticle, ArticleMetadata
 from services.document_parser import DocumentParser
-from services.analysis_agent import create_analysis_agent, ContentPlan
-from services.writing_agent import create_writing_agent, KBArticle
-from services.metadata_agent import create_metadata_agent, ArticleMetadata
+from services.analysis_agent import create_analysis_agent
+from services.writing_agent import create_writing_agent
+from services.metadata_agent import create_metadata_agent
 
-from dotenv import load_dotenv
-load_dotenv()
+# Load environment
+load_env_file()
 
 logger = logging.getLogger(__name__)
 
@@ -47,46 +49,6 @@ class PipelineStage(str, Enum):
     METADATA = "metadata"
     COMPLETE = "complete"
     FAILED = "failed"
-
-
-@dataclass
-class PipelineConfig:
-    """Configuration for pipeline execution"""
-    # LLM Settings
-    provider: str = 'openai'
-    model: Optional[str] = None
-    api_key: Optional[str] = None
-    temperature: float = 0.7
-    
-    # Pipeline Settings
-    output_dir: str = "outputs"
-    save_intermediates: bool = True  # Save content plan, etc.
-    include_source_attribution: bool = True
-    include_metadata_frontmatter: bool = True
-    
-    # Processing Settings
-    verbose: bool = False
-    max_retries: int = 3
-    
-    # Article Settings
-    author: Optional[str] = None
-    version: Optional[str] = "1.0"
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            "provider": self.provider,
-            "model": self.model,
-            "temperature": self.temperature,
-            "output_dir": self.output_dir,
-            "save_intermediates": self.save_intermediates,
-            "include_source_attribution": self.include_source_attribution,
-            "include_metadata_frontmatter": self.include_metadata_frontmatter,
-            "verbose": self.verbose,
-            "max_retries": self.max_retries,
-            "author": self.author,
-            "version": self.version
-        }
 
 
 @dataclass
@@ -165,18 +127,20 @@ class KBPipeline:
             logging.basicConfig(level=logging.INFO)
         
         logger.info("Initializing KB Generation Pipeline")
-        logger.info(f"Provider: {self.config.provider}")
-        logger.info(f"Output directory: {self.config.output_dir}")
+        logger.info(f"Provider: {self.config.llm.provider.value}")
+        logger.info(f"Model: {self.config.llm.get_model()}")
+        logger.info(f"Output directory: {self.config.output.output_dir}")
         
         # Initialize components
         self._init_components()
         
         # Create output directory
-        self.output_path = Path(self.config.output_dir)
+        self.output_path = Path(self.config.output.output_dir)
         self.output_path.mkdir(parents=True, exist_ok=True)
         
         logger.info("Pipeline initialized successfully")
-    
+
+
     def _init_components(self):
         """Initialize all pipeline components"""
         logger.debug("Initializing pipeline components")
@@ -186,32 +150,18 @@ class KBPipeline:
         logger.debug("✓ Document Parser initialized")
         
         # Analysis Agent
-        self.analyzer = create_analysis_agent(
-            provider=self.config.provider,
-            model=self.config.model,
-            api_key=self.config.api_key,
-            verbose=self.config.verbose
-        )
+        self.analyzer = create_analysis_agent(self.config)
         logger.debug("✓ Analysis Agent initialized")
         
         # Writing Agent
-        self.writer = create_writing_agent(
-            provider=self.config.provider,
-            model=self.config.model,
-            api_key=self.config.api_key,
-            verbose=self.config.verbose
-        )
+        self.writer = create_writing_agent(self.config)
         logger.debug("✓ Writing Agent initialized")
         
         # Metadata Agent
-        self.metadata_generator = create_metadata_agent(
-            provider=self.config.provider,
-            model=self.config.model,
-            api_key=self.config.api_key,
-            verbose=self.config.verbose
-        )
+        self.metadata_generator = create_metadata_agent(self.config)
         logger.debug("✓ Metadata Agent initialized")
-    
+
+
     def process_document(self, document_path: str) -> PipelineResult:
         """
         Process a single document through the complete pipeline
@@ -267,7 +217,10 @@ class KBPipeline:
             logger.info("=" * 70)
             logger.info(f"Execution time: {execution_time:.2f} seconds")
             logger.info(f"Article saved to: {paths['article']}")
-            logger.info(f"Metadata saved to: {paths['metadata']}")
+            if 'metadata' in paths:
+                logger.info(f"Metadata saved to: {paths['metadata']}")
+            if 'content_plan' in paths:
+                logger.info(f"Content plan saved to: {paths['content_plan']}")
             
             return PipelineResult(
                 success=True,
@@ -329,8 +282,8 @@ class KBPipeline:
         """Stage 3: Write KB article"""
         article = self.writer.write(
             content_plan=content_plan,
-            parsed_result=parsed_result,
-            include_source_attribution=self.config.include_source_attribution
+            parsed_result=parsed_result
+            # include_source_attribution now comes from config
         )
         
         # Validate article
@@ -342,7 +295,7 @@ class KBPipeline:
         logger.debug(f"Reading time: {article.estimated_reading_time}")
         
         return article
-    
+
     def _generate_metadata(
         self,
         article: KBArticle,
@@ -353,9 +306,8 @@ class KBPipeline:
         metadata = self.metadata_generator.generate(
             article=article,
             content_plan=content_plan,
-            parsed_result=parsed_result,
-            author=self.config.author,
-            version=self.config.version
+            parsed_result=parsed_result
+        
         )
         
         logger.debug(f"Category: {metadata.category}")
@@ -383,7 +335,7 @@ class KBPipeline:
         article_path = doc_dir / f"{metadata.slug}.md"
         
         # Add frontmatter if configured
-        if self.config.include_metadata_frontmatter:
+        if self.config.output.include_frontmatter:
             frontmatter = self.metadata_generator.generate_frontmatter(metadata)
             full_content = frontmatter + "\n" + article.content
             
@@ -400,19 +352,21 @@ class KBPipeline:
         logger.debug(f"Saved article: {article_path}")
         
         # Save metadata
-        metadata_path = doc_dir / f"{metadata.slug}_metadata.json"
-        self.metadata_generator.save_metadata(metadata, str(metadata_path))
-        paths['metadata'] = str(metadata_path)
-        logger.debug(f"Saved metadata: {metadata_path}")
+        if self.config.output.generate_metadata:
+            metadata_path = doc_dir / f"{metadata.slug}_metadata.json"
+            self.metadata_generator.save_metadata(metadata, str(metadata_path))
+            paths['metadata'] = str(metadata_path)
+            logger.debug(f"Saved metadata: {metadata_path}")
         
         # Save content plan if configured
-        if self.config.save_intermediates:
+        if self.config.output.generate_plan:
             plan_path = doc_dir / f"{metadata.slug}_plan.json"
             self.analyzer.save_content_plan(content_plan, str(plan_path))
             paths['content_plan'] = str(plan_path)
             logger.debug(f"Saved content plan: {plan_path}")
-            
-            # Save parsed result
+        
+        # Save parsed result if configured
+        if self.config.output.generate_parsed:
             parsed_path = doc_dir / f"{metadata.slug}_parsed.json"
             with open(parsed_path, 'w', encoding='utf-8') as f:
                 json.dump(parsed_result, f, indent=2, ensure_ascii=False)
@@ -420,7 +374,8 @@ class KBPipeline:
             logger.debug(f"Saved parsed result: {parsed_path}")
         
         return paths
-    
+
+
     def process_batch(
         self,
         document_paths: List[str],
@@ -536,22 +491,22 @@ class KBPipeline:
             "config": self.config.to_dict(),
             "components": {
                 "parser": "DocumentParser",
-                "analyzer": f"AnalysisAgent ({self.config.provider})",
-                "writer": f"WritingAgent ({self.config.provider})",
-                "metadata": f"MetadataAgent ({self.config.provider})"
+                "analyzer": f"AnalysisAgent ({self.config.llm.provider.value})",
+                "writer": f"WritingAgent ({self.config.llm.provider.value})",
+                "metadata": f"MetadataAgent ({self.config.llm.provider.value})"
             },
             "output_directory": str(self.output_path)
         }
     
+
 # ============================================================================
 # Convenience Functions
 # ============================================================================
 
 def create_pipeline(
-    provider: str = 'openai',
+    provider: str = 'google',
     model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    output_dir: str = "output",
+    output_dir: str = "outputs",
     verbose: bool = False,
     **kwargs
 ) -> KBPipeline:
@@ -561,44 +516,35 @@ def create_pipeline(
     Args:
         provider: LLM provider ('openai', 'anthropic', 'google', 'ollama')
         model: Model name (uses default if None)
-        api_key: API key (uses env var if None)
         output_dir: Output directory path
         verbose: Enable verbose logging
-        **kwargs: Additional PipelineConfig parameters
+        **kwargs: Additional config parameters
         
     Returns:
         Configured KBPipeline
     """
-    config = PipelineConfig(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        output_dir=output_dir,
-        verbose=verbose,
-        **kwargs
-    )
+    config = PipelineConfig()
+    config.llm.provider = LLMProvider(provider)
+    if model:
+        config.llm.model = model
+    config.output.output_dir = output_dir
+    config.verbose = verbose
+    
+    # Apply any additional kwargs
+    for key, value in kwargs.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
     
     return KBPipeline(config)
 
 
 def quick_process(
     document_path: str,
-    provider: str = 'openai',
-    output_dir: str = "output",
+    provider: str = 'google',
+    output_dir: str = "outputs",
     verbose: bool = False
 ) -> PipelineResult:
-    """
-    Quick processing of a single document with minimal configuration
-    
-    Args:
-        document_path: Path to document
-        provider: LLM provider
-        output_dir: Output directory
-        verbose: Enable verbose output
-        
-    Returns:
-        PipelineResult
-    """
+    """Quick processing of a single document"""
     pipeline = create_pipeline(
         provider=provider,
         output_dir=output_dir,
@@ -621,134 +567,62 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Process single document
   python pipeline.py document.pdf
-  
-  # Process with specific provider
   python pipeline.py document.pdf --provider anthropic
-  
-  # Process entire directory
   python pipeline.py docs/ --directory
-  
-  # Process with custom output
   python pipeline.py document.pdf --output my_kb --author "John Doe"
-  
-  # Verbose mode
   python pipeline.py document.pdf --verbose
         """
     )
     
-    parser.add_argument(
-        'input',
-        help='Input document path or directory'
-    )
-    
-    parser.add_argument(
-        '--provider',
-        default='google',
-        choices=['openai', 'anthropic', 'google', 'ollama'],
-        help='LLM provider (default: google)'
-    )
-    
-    parser.add_argument(
-        '--model',
-        help='Specific model name (uses provider default if not specified)'
-    )
-    
-    parser.add_argument(
-        '--api-key',
-        help='API key (uses environment variable if not specified)'
-    )
-    
-    parser.add_argument(
-        '--output', '-o',
-        default='outputs',
-        help='Output directory (default: outputs)'
-    )
-    
-    parser.add_argument(
-        '--directory', '-d',
-        action='store_true',
-        help='Process all documents in directory'
-    )
-    
-    parser.add_argument(
-        '--recursive', '-r',
-        action='store_true',
-        help='Process directory recursively'
-    )
-    
-    parser.add_argument(
-        '--author',
-        help='Article author name'
-    )
-    
-    parser.add_argument(
-        '--version',
-        default='1.0',
-        help='Article version (default: 1.0)'
-    )
-    
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose output'
-    )
-    
-    parser.add_argument(
-        '--no-intermediates',
-        action='store_true',
-        help='Do not save intermediate files (content plan, parsed result)'
-    )
-    
-    parser.add_argument(
-        '--no-attribution',
-        action='store_true',
-        help='Do not include source attribution in articles'
-    )
-    
-    parser.add_argument(
-        '--extensions',
-        nargs='+',
-        help='File extensions to process (for directory mode)'
-    )
+    parser.add_argument('input', help='Input document path or directory')
+    parser.add_argument('--provider', default='google', 
+                       choices=['openai', 'anthropic', 'google', 'ollama'])
+    parser.add_argument('--model', help='Specific model name')
+    parser.add_argument('--output', '-o', default='outputs', help='Output directory')
+    parser.add_argument('--directory', '-d', action='store_true')
+    parser.add_argument('--recursive', '-r', action='store_true')
+    parser.add_argument('--author', help='Article author name')
+    parser.add_argument('--version', default='1.0', help='Article version')
+    parser.add_argument('--verbose', '-v', action='store_true')
+    parser.add_argument('--no-plan', action='store_true', 
+                       help='Do not save content plan')
+    parser.add_argument('--no-attribution', action='store_true',
+                       help='Do not include source attribution')
+    parser.add_argument('--extensions', nargs='+',
+                       help='File extensions to process')
     
     args = parser.parse_args()
     
-    # Create pipeline configuration
-    config = PipelineConfig(
-        provider=args.provider,
-        model=args.model,
-        api_key=args.api_key,
-        output_dir=args.output,
-        save_intermediates=not args.no_intermediates,
-        include_source_attribution=not args.no_attribution,
-        verbose=args.verbose,
-        author=args.author,
-        version=args.version
-    )
+    # Create configuration
+    config = PipelineConfig()
+    config.llm.provider = LLMProvider(args.provider)
+    if args.model:
+        config.llm.model = args.model
+    config.output.output_dir = args.output
+    config.output.generate_plan = not args.no_plan
+    config.output.include_source_attribution = not args.no_attribution
+    config.verbose = args.verbose
+    if args.author:
+        config.output.author = args.author
+    if args.version:
+        config.output.version = args.version
     
     # Create pipeline
     pipeline = KBPipeline(config)
     
     # Process input
     if args.directory:
-        # Process directory
         results = pipeline.process_directory(
             directory_path=args.input,
             file_extensions=args.extensions,
             recursive=args.recursive,
             continue_on_error=True
         )
-        
-        # Print summary
         successful = sum(1 for r in results if r.success)
         print(f"\n✓ Processed {successful}/{len(results)} documents successfully")
-        
     else:
-        # Process single document
         result = pipeline.process_document(args.input)
-        
         if result.success:
             print(f"\n✓ Article created: {result.article_path}")
             print(f"✓ Metadata saved: {result.metadata_path}")
@@ -757,7 +631,6 @@ Examples:
             return 1
     
     return 0
-
 
 if __name__ == "__main__":
     exit(main())
@@ -784,16 +657,17 @@ if result.success:
 
 2. Process with Custom Configuration:
 ------------------------------------
-from pipeline import PipelineConfig, KBPipeline
+from config import PipelineConfig, LLMProvider
+from pipeline import KBPipeline
 
-config = PipelineConfig(
-    provider='anthropic',
-    model='claude-3-sonnet-20240229',
-    output_dir='my_knowledge_base',
-    author='John Doe',
-    verbose=True,
-    save_intermediates=True
-)
+config = PipelineConfig()
+config.llm.provider = LLMProvider.ANTHROPIC
+config.llm.model = 'claude-3-5-sonnet-20241022'
+config.output.output_dir = 'my_knowledge_base'
+config.output.author = 'John Doe'
+config.verbose = True
+config.output.generate_plan = True
+config.output.generate_parsed = True
 
 pipeline = KBPipeline(config)
 result = pipeline.process_document('tutorial.pdf')

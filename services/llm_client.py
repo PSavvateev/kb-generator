@@ -1,43 +1,18 @@
-# llm_client.py
 """
 LLM Client Wrapper for KB Generation Pipeline
 
-Supports multiple LLM providers:
-- OpenAI (GPT-4, GPT-3.5, etc.)
-- Anthropic (Claude Sonnet, Opus, etc.)
-- Google (Gemini 2.5, etc.) - NEW SDK
-- Local Llama (via Ollama)
-
-Usage:
-    llm = LLMClient(provider='openai', model='gpt-4')
-    response = llm.generate(prompt, system_prompt="You are helpful")
-    
-    # For JSON responses
-    data = llm.generate_json(prompt, schema={...})
 """
 
 import json
 import logging
 import os
+from typing import Dict, List, Optional, Any
 import time
-from typing import Dict, List, Optional, Any, Union
-from enum import Enum
 
-# Type hints
-try:
-    from typing import Literal
-except ImportError:
-    from typing_extensions import Literal
+
+from config import LLMConfig, LLMProvider
 
 logger = logging.getLogger(__name__)
-
-
-class LLMProvider(str, Enum):
-    """Supported LLM providers"""
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    GOOGLE = "google"
-    OLLAMA = "ollama"  # For local Llama
 
 
 class LLMClient:
@@ -51,71 +26,32 @@ class LLMClient:
     - Token counting and cost tracking
     - Error handling and logging
     """
-    
-    # Default models for each provider
-    DEFAULT_MODELS = {
-        LLMProvider.OPENAI: "gpt-4",
-        LLMProvider.ANTHROPIC: "claude-sonnet-4",
-        LLMProvider.GOOGLE: "gemini-2.5-flash",  # Updated to latest model
-        LLMProvider.OLLAMA: "gemma3:1b"  # or llama2, mistral, etc.
-    }
-    
-    # Token limits for context window
-    TOKEN_LIMITS = {
-        "gpt-4": 128000,
-        "gpt-4-turbo": 128000,
-        "gpt-3.5-turbo": 16385,
-        "claude-sonnet-4": 200000,
-        "claude-opus-4": 200000,
-        "gemini-2.5-flash": 1000000,  # 1M token context window
-        "gemini-pro": 32768,
-        "gpt-oss:20b": 8192,
-        "llama3.1:70b": 8192,
-    }
-    
-    def __init__(
-        self,
-        provider: Union[str, LLMProvider] = LLMProvider.OPENAI,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        temperature: float = 0.3,
-        max_tokens: int = 4000,
-        timeout: int = 120,
-        max_retries: int = 3,
-        base_url: Optional[str] = None,  # For Ollama
-        **kwargs
-    ):
+
+    def __init__(self, config: LLMConfig):
         """
-        Initialize LLM client
+        Initialize LLM client from configuration
         
         Args:
-            provider: LLM provider ('openai', 'anthropic', 'google', 'ollama')
-            model: Model name (uses default if None)
-            api_key: API key (reads from env if None)
-            temperature: Sampling temperature (0.0-1.0)
-            max_tokens: Maximum tokens in response
-            timeout: Request timeout in seconds
-            max_retries: Number of retry attempts
-            base_url: Base URL for API (mainly for Ollama)
-            **kwargs: Additional provider-specific parameters
+            config: LLMConfig object with all settings
         """
-        # Convert string to enum if needed
-        if isinstance(provider, str):
-            provider = LLMProvider(provider.lower())
+        self.config = config
         
-        self.provider = provider
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.timeout = timeout
-        self.max_retries = max_retries
-        self.base_url = base_url
-        self.extra_kwargs = kwargs
+        # Get all settings from config
+        self.provider = config.provider
+        self.model = config.get_model()
+        self.api_key = config.get_api_key()
+        self.temperature = config.temperature
+        self.max_tokens = config.max_tokens
+        self.timeout = config.timeout
+        self.max_retries = config.max_retries
+        self.base_url = config.ollama_base_url if config.provider == LLMProvider.OLLAMA else None
         
-        # Set model (use default if not provided)
-        self.model = model or self.DEFAULT_MODELS[provider]
-        
-        # Get API key from parameter or environment
-        self.api_key = api_key or self._get_api_key_from_env()
+        # Validate we have API key (if needed)
+        if self.provider != LLMProvider.OLLAMA and not self.api_key:
+            raise ValueError(
+                f"API key required for {self.provider.value}. "
+                f"Set it in .env file or pass via config."
+            )
         
         # Initialize provider-specific client
         self.client = None
@@ -124,37 +60,10 @@ class LLMClient:
         # Track usage
         self.total_tokens = 0
         self.total_calls = 0
-        
-        logger.info(f"Initialized LLMClient: provider={provider}, model={self.model}")
     
-    def _get_api_key_from_env(self) -> Optional[str]:
-        """Get API key from environment variables"""
-        env_vars = {
-            LLMProvider.OPENAI: "OPENAI_API_KEY",
-            LLMProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
-            LLMProvider.GOOGLE: "GOOGLE_API_KEY",  
-            LLMProvider.OLLAMA: None  # Ollama doesn't need API key
-        }
-        
-        env_var = env_vars.get(self.provider)
-        
-        if env_var is None:
-            return None
-        
-        # Handle multiple possible env vars (for Google)
-        if isinstance(env_var, list):
-            for var in env_var:
-                api_key = os.getenv(var)
-                if api_key:
-                    return api_key
-            logger.warning(f"API key not found in environment: {env_var}")
-            return None
-        else:
-            api_key = os.getenv(env_var)
-            if not api_key:
-                logger.warning(f"API key not found in environment: {env_var}")
-            return api_key
-    
+        logger.info(f"Initialized LLMClient: provider={self.provider.value}, model={self.model}")
+
+
     def _init_client(self):
         """Initialize provider-specific client"""
         try:
@@ -176,13 +85,7 @@ class LLMClient:
     
     def _get_required_package(self) -> str:
         """Get required package name for provider"""
-        packages = {
-            LLMProvider.OPENAI: "openai",
-            LLMProvider.ANTHROPIC: "anthropic",
-            LLMProvider.GOOGLE: "google-genai",  # Updated to new package
-            LLMProvider.OLLAMA: "ollama"
-        }
-        return packages[self.provider]
+        return self.config.required_packages.get(self.provider, "unknown")
     
     def _init_openai(self):
         """Initialize OpenAI client"""
@@ -516,6 +419,8 @@ class LLMClient:
                 # Parse JSON
                 try:
                     result = json.loads(response)
+                    if schema:
+                        self._validate_json_schema(result, schema)
                     return result
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse JSON response: {e}")
@@ -546,75 +451,6 @@ class LLMClient:
         raise Exception("Max retries exceeded")
 
 
-
-    def _generate_json_openai(
-        self,
-        prompt: str,
-        system_prompt: Optional[str],
-        schema: Optional[Dict],
-        **kwargs
-    ) -> str:
-        """Generate JSON with OpenAI's JSON mode"""
-        messages = []
-        
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        
-        messages.append({"role": "user", "content": prompt})
-        
-        # Use JSON mode
-        params = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "response_format": {"type": "json_object"}  # Force JSON output
-        }
-        
-        params.update(kwargs)
-        
-        response = self.client.chat.completions.create(**params)
-        
-        # Track tokens
-        if hasattr(response, 'usage'):
-            self.total_tokens += response.usage.total_tokens
-        
-        return response.choices[0].message.content
-    
-    def _parse_json_response(self, response: str) -> Dict:
-        """
-        Parse JSON from LLM response
-        
-        Handles common issues:
-        - Markdown code blocks
-        - Extra text before/after JSON
-        - Invalid escape sequences
-        """
-        # Remove markdown code blocks if present
-        if "```json" in response:
-            response = response.split("```json")[1].split("```")[0]
-        elif "```" in response:
-            response = response.split("```")[1].split("```")[0]
-        
-        # Remove common prefixes
-        for prefix in ["json\n", "JSON\n", "Here is the JSON:\n", "Here's the JSON:\n"]:
-            if response.startswith(prefix):
-                response = response[len(prefix):]
-        
-        # Strip whitespace
-        response = response.strip()
-        
-        # Parse JSON
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError as e:
-            # Try to find JSON object in response
-            import re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-            raise e
-    
     def _validate_json_schema(self, data: Dict, schema: Dict):
         """
         Validate JSON against schema
@@ -654,7 +490,7 @@ class LLMClient:
     
     def get_token_limit(self) -> int:
         """Get context window token limit for current model"""
-        return self.TOKEN_LIMITS.get(self.model, 4096)
+        return self.config.token_limits.get(self.model, 4096)
     
     def get_usage_stats(self) -> Dict[str, int]:
         """
@@ -692,24 +528,22 @@ class LLMClient:
 
 # Convenience functions for quick initialization
 
-def create_llm_client(
-    provider: str,
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    **kwargs
-) -> LLMClient:
+def create_llm_client(config: LLMConfig) -> LLMClient:
     """
     Convenience function to create LLMClient
     
+    Args:
+        config: LLMConfig object
+        
     Example:
-        llm = create_llm_client('openai', model='gpt-4')
+        from config import LLMConfig, LLMProvider
+        
+        config = LLMConfig()
+        config.provider = LLMProvider.GOOGLE
+        llm = create_llm_client(config)
     """
-    return LLMClient(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        **kwargs
-    )
+    return LLMClient(config=config)
+
 
 
 # Example usage and testing
@@ -720,94 +554,51 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
+    from config import LLMConfig, LLMProvider, load_env_file
+    
+    # Load environment variables
+    load_env_file()
+    
     print("LLM Client Wrapper - Example Usage\n")
     
-    # Example 1: OpenAI
+    # Example 1: Google Gemini (Default)
     print("=" * 60)
-    print("Example 1: OpenAI GPT-4")
+    print("Example 1: Google Gemini")
     print("=" * 60)
     try:
-        llm_openai = LLMClient(provider='openai', model='gpt-4', temperature=0.3)
+        config = LLMConfig()
+        config.provider = LLMProvider.GOOGLE
+        llm = LLMClient(config)
         
-        response = llm_openai.generate(
+        response = llm.generate(
             prompt="What is the capital of France?",
             system_prompt="You are a helpful geography assistant. Answer concisely."
         )
         print(f"Response: {response}\n")
         
         # JSON generation
-        json_response = llm_openai.generate_json(
-            prompt="List three colors with their RGB values.",
-            schema={
-                "type": "object",
-                "required": ["colors"],
-                "properties": {
-                    "colors": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string"},
-                                "rgb": {"type": "array"}
-                            }
-                        }
-                    }
-                }
-            }
+        json_response = llm.generate_json(
+            prompt="List three colors with their RGB values as a JSON object."
         )
         print(f"JSON Response: {json.dumps(json_response, indent=2)}\n")
-        
-        print(f"Usage stats: {llm_openai.get_usage_stats()}\n")
+        print(f"Usage stats: {llm.get_usage_stats()}\n")
         
     except Exception as e:
         print(f"Error: {e}\n")
     
-    # Example 2: Anthropic Claude
+    # Example 2: OpenAI
     print("=" * 60)
-    print("Example 2: Anthropic Claude")
+    print("Example 2: OpenAI GPT-4")
     print("=" * 60)
     try:
-        llm_claude = LLMClient(provider='anthropic', model='claude-sonnet-4')
+        config = LLMConfig()
+        config.provider = LLMProvider.OPENAI
+        config.model = "gpt-4o-mini"
+        llm = LLMClient(config)
         
-        response = llm_claude.generate(
+        response = llm.generate(
             prompt="Explain machine learning in one sentence.",
             system_prompt="You are a technical educator."
-        )
-        print(f"Response: {response}\n")
-        
-    except Exception as e:
-        print(f"Error: {e}\n")
-    
-    # Example 3: Google Gemini (NEW SDK)
-    print("=" * 60)
-    print("Example 3: Google Gemini (New SDK)")
-    print("=" * 60)
-    try:
-        llm_gemini = LLMClient(provider='google', model='gemini-2.5-flash')
-        
-        response = llm_gemini.generate(
-            prompt="What is Python programming language?",
-            system_prompt="You are a programming expert."
-        )
-        print(f"Response: {response}\n")
-        
-    except Exception as e:
-        print(f"Error: {e}\n")
-    
-    # Example 4: Local Ollama (Llama)
-    print("=" * 60)
-    print("Example 4: Ollama (Local Llama)")
-    print("=" * 60)
-    try:
-        llm_ollama = LLMClient(
-            provider='ollama',
-            model='gpt-oss:20b',
-            base_url='http://localhost:11434'  # Default Ollama URL
-        )
-        
-        response = llm_ollama.generate(
-            prompt="What is artificial intelligence?",
-            system_prompt="You are a helpful AI assistant."
         )
         print(f"Response: {response}\n")
         
