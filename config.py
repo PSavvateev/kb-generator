@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Dict
 from pathlib import Path
-from services.models import DocumentType, DifficultyLevel
+from services.models import DocumentType, DifficultyLevel, CleaningOption
 
 # ============================================================================
 # Enums
@@ -153,6 +153,49 @@ class ParserConfig:
 
 
 @dataclass
+class CleanerConfig:
+    """Content cleaner configuration"""
+    # Enable/disable cleaning stage
+    enabled: bool = True
+    
+    # Cleaning options (all enabled by default for best quality)
+    remove_artifacts: bool = True
+    normalize_whitespace: bool = True
+    fix_encoding: bool = True
+    remove_duplicates: bool = True
+    clean_bullets: bool = True
+    
+    # Conservative options (disabled by default)
+    remove_headers_footers: bool = False  # Can be aggressive
+    
+    # Statistics and debugging
+    collect_stats: bool = False
+    
+    # Security limits
+    max_text_length: int = 10_000_000  # 10MB of text
+    
+    def get_enabled_options(self) -> set:
+        """Get set of enabled CleaningOption enums"""
+        enabled = set()
+        
+        if self.remove_artifacts:
+            enabled.add(CleaningOption.REMOVE_ARTIFACTS)
+        if self.normalize_whitespace:
+            enabled.add(CleaningOption.NORMALIZE_WHITESPACE)
+        if self.fix_encoding:
+            enabled.add(CleaningOption.FIX_ENCODING)
+        if self.remove_duplicates:
+            enabled.add(CleaningOption.REMOVE_DUPLICATES)
+        if self.clean_bullets:
+            enabled.add(CleaningOption.CLEAN_BULLETS)
+        if self.remove_headers_footers:
+            enabled.add(CleaningOption.REMOVE_HEADERS_FOOTERS)
+        
+        return enabled
+
+
+
+@dataclass
 class OutputConfig:
     """Output configuration"""
     output_dir: str = "outputs"
@@ -213,6 +256,7 @@ class PipelineConfig:
     # Sub-configurations
     llm: LLMConfig = field(default_factory=LLMConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
+    cleaner: CleanerConfig = field(default_factory=CleanerConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     
@@ -281,6 +325,8 @@ def get_production_config() -> PipelineConfig:
     config.llm.provider = LLMProvider.GOOGLE
     config.llm.model = "gemini-1.5-flash"
     config.llm.temperature = 0.7
+    config.cleaner.enabled = True             
+    config.cleaner.collect_stats = False       
     config.verbose = False
     config.log_level = "INFO"
     return config
@@ -292,6 +338,8 @@ def get_quality_config() -> PipelineConfig:
     config.llm.provider = LLMProvider.ANTHROPIC
     config.llm.model = "claude-3-5-sonnet-20241022"
     config.llm.temperature = 0.8
+    config.cleaner.enabled = True              
+    config.cleaner.collect_stats = True        
     config.verbose = True
     config.log_level = "DEBUG"
     return config
@@ -302,6 +350,8 @@ def get_development_config() -> PipelineConfig:
     config = PipelineConfig()
     config.llm.provider = LLMProvider.OLLAMA
     config.llm.model = "qwen2.5:7b"
+    config.cleaner.enabled = True              
+    config.cleaner.collect_stats = True        
     config.verbose = True
     config.log_level = "DEBUG"
     config.output.generate_parsed = True
@@ -313,8 +363,10 @@ def get_fast_config() -> PipelineConfig:
     """Fast configuration for quick testing"""
     config = PipelineConfig()
     config.llm.provider = LLMProvider.GOOGLE
-    config.llm.model = "gemini-1.5-flash"
+    config.llm.model = "gemini-2.5-flash"
     config.llm.temperature = 0.5
+    config.cleaner.enabled = True                     
+    config.cleaner.remove_headers_footers = True
     config.agent.analysis_suggest_related_articles = False
     config.verbose = False
     return config
@@ -379,6 +431,19 @@ def print_config(config: PipelineConfig) -> None:
         print(f"  Max File Size: {config.parser.max_file_size / (1024*1024):.0f} MB")
         print(f"  Extract Tables: {config.parser.extract_tables}")
         print(f"  Strict Validation: {config.parser.strict_table_validation}")
+
+    # Cleaner Configuration 
+    if hasattr(config, 'cleaner') and config.cleaner:
+        print("\n🧹 Cleaner Configuration:")
+        print(f"  Enabled: {config.cleaner.enabled}")
+        if config.cleaner.enabled:
+            print(f"  Remove Artifacts: {config.cleaner.remove_artifacts}")
+            print(f"  Normalize Whitespace: {config.cleaner.normalize_whitespace}")
+            print(f"  Fix Encoding: {config.cleaner.fix_encoding}")
+            print(f"  Remove Duplicates: {config.cleaner.remove_duplicates}")
+            print(f"  Clean Bullets: {config.cleaner.clean_bullets}")
+            print(f"  Remove Headers/Footers: {config.cleaner.remove_headers_footers}")
+            print(f"  Collect Stats: {config.cleaner.collect_stats}")
     
     # Output Configuration
     if hasattr(config, 'output') and config.output:

@@ -55,6 +55,49 @@ class ContentCategory(str, Enum):
     GETTING_STARTED = "getting_started"
 
 
+class CleaningOption(Enum):
+    """Available cleaning options"""
+    REMOVE_ARTIFACTS = "remove_artifacts"
+    REMOVE_HEADERS_FOOTERS = "remove_headers_footers"
+    NORMALIZE_WHITESPACE = "normalize_whitespace"
+    FIX_ENCODING = "fix_encoding"
+    REMOVE_DUPLICATES = "remove_duplicate_lines"
+    CLEAN_BULLETS = "clean_bullets_and_numbering"
+
+
+# ============================================================================
+# Data Models
+# ============================================================================
+
+@dataclass
+class CleaningStats:
+    """Statistics about cleaning operations"""  
+    original_length: int = 0
+    cleaned_length: int = 0
+    lines_removed: int = 0
+    artifacts_removed: int = 0
+    encoding_fixes: int = 0
+    duplicates_removed: int = 0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return asdict(self)
+    
+    def __str__(self) -> str:
+        reduction = self.original_length - self.cleaned_length
+        pct = (reduction / self.original_length * 100) if self.original_length > 0 else 0
+        return (
+            f"CleaningStats:\n"
+            f"  Original length: {self.original_length:,} chars\n"
+            f"  Cleaned length: {self.cleaned_length:,} chars\n"
+            f"  Reduction: {reduction:,} chars ({pct:.1f}%)\n"
+            f"  Lines removed: {self.lines_removed}\n"
+            f"  Artifacts removed: {self.artifacts_removed}\n"
+            f"  Encoding fixes: {self.encoding_fixes}\n"
+            f"  Duplicates removed: {self.duplicates_removed}"
+        )
+
+
 # ============================================================================
 # Content Planning Models (used by AnalysisAgent)
 # ============================================================================

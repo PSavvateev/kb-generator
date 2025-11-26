@@ -1,3 +1,4 @@
+# services/content_cleaner.py
 """
 Content Cleaner Service
 Cleans and normalizes extracted text
@@ -7,68 +8,12 @@ Cleans and normalizes extracted text
 import re
 import logging
 from typing import Dict, List, Optional, Set
-from dataclasses import dataclass, field
-from enum import Enum
+from config import PipelineConfig
+from services.models import CleaningOption, CleaningStats  
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-class CleaningOption(Enum):
-    """Available cleaning options"""
-    REMOVE_ARTIFACTS = "remove_artifacts"
-    REMOVE_HEADERS_FOOTERS = "remove_headers_footers"
-    NORMALIZE_WHITESPACE = "normalize_whitespace"
-    FIX_ENCODING = "fix_encoding"
-    REMOVE_DUPLICATES = "remove_duplicate_lines"
-    CLEAN_BULLETS = "clean_bullets_and_numbering"
-
-
-@dataclass
-class CleaningStats:
-    """Statistics about cleaning operations"""
-    original_length: int = 0
-    cleaned_length: int = 0
-    lines_removed: int = 0
-    artifacts_removed: int = 0
-    encoding_fixes: int = 0
-    duplicates_removed: int = 0
-    
-    def __str__(self) -> str:
-        reduction = self.original_length - self.cleaned_length
-        pct = (reduction / self.original_length * 100) if self.original_length > 0 else 0
-        return (
-            f"CleaningStats:\n"
-            f"  Original length: {self.original_length:,} chars\n"
-            f"  Cleaned length: {self.cleaned_length:,} chars\n"
-            f"  Reduction: {reduction:,} chars ({pct:.1f}%)\n"
-            f"  Lines removed: {self.lines_removed}\n"
-            f"  Artifacts removed: {self.artifacts_removed}\n"
-            f"  Encoding fixes: {self.encoding_fixes}\n"
-            f"  Duplicates removed: {self.duplicates_removed}"
-        )
-
-
-@dataclass
-class CleaningConfig:
-    """Configuration for content cleaning"""
-    enabled_options: Set[CleaningOption] = field(default_factory=lambda: {
-        CleaningOption.REMOVE_ARTIFACTS,
-        CleaningOption.NORMALIZE_WHITESPACE,
-        CleaningOption.FIX_ENCODING,
-        CleaningOption.REMOVE_DUPLICATES,
-        CleaningOption.CLEAN_BULLETS,
-    })
-    
-    # Security limits
-    max_text_length: int = 10_000_000  # 10MB of text
-    
-    # Header/footer removal (disabled by default as it can be aggressive)
-    remove_headers_footers: bool = False
-    
-    # Statistics
-    collect_stats: bool = False
 
 
 class ContentCleaner:
@@ -133,18 +78,24 @@ class ContentCleaner:
         '•': '•',
     }
     
-    def __init__(self, config: Optional[CleaningConfig] = None):
+    def __init__(self, config: PipelineConfig):
         """
-        Initialize ContentCleaner
+        Initialize ContentCleaner from PipelineConfig
         
         Args:
-            config: Optional cleaning configuration
+            config: Pipeline configuration
         """
-        self.config = config or CleaningConfig()
-        self.stats = CleaningStats() if self.config.collect_stats else None
+        # Extract cleaner settings from config
+        self.enabled_options = config.cleaner.get_enabled_options()
+        self.max_text_length = config.cleaner.max_text_length
+        self.remove_headers_footers = config.cleaner.remove_headers_footers
+        self.collect_stats = config.cleaner.collect_stats
         
-        logger.info(f"ContentCleaner initialized with {len(self.config.enabled_options)} enabled options")
-    
+        # Initialize stats if enabled
+        self.stats = CleaningStats() if self.collect_stats else None
+        
+        logger.info(f"ContentCleaner initialized with {len(self.enabled_options)} enabled options")
+
     def clean(self, text: str) -> str:
         """
         Clean text by removing artifacts, normalizing spaces, and fixing common issues
@@ -156,7 +107,8 @@ class ContentCleaner:
             Cleaned text
             
         Raises:
-            ValueError: If text is too long or invalid type
+            TypeError: If text is not a string
+            ValueError: If text is too long
         """
         
         # Validate input
@@ -167,10 +119,10 @@ class ContentCleaner:
             return ""
         
         # Check size limit
-        if len(text) > self.config.max_text_length:
+        if len(text) > self.max_text_length:
             raise ValueError(
                 f"Text too long: {len(text):,} chars. "
-                f"Maximum allowed: {self.config.max_text_length:,} chars"
+                f"Maximum allowed: {self.max_text_length:,} chars"
             )
         
         # Initialize stats
@@ -180,22 +132,22 @@ class ContentCleaner:
         logger.debug(f"Cleaning text: {len(text):,} characters")
         
         # Apply cleaning steps based on configuration
-        if CleaningOption.REMOVE_ARTIFACTS in self.config.enabled_options:
+        if CleaningOption.REMOVE_ARTIFACTS in self.enabled_options:
             text = self._remove_artifacts(text)
         
-        if self.config.remove_headers_footers:
+        if self.remove_headers_footers:
             text = self._remove_headers_footers(text)
         
-        if CleaningOption.NORMALIZE_WHITESPACE in self.config.enabled_options:
+        if CleaningOption.NORMALIZE_WHITESPACE in self.enabled_options:
             text = self._normalize_whitespace(text)
         
-        if CleaningOption.FIX_ENCODING in self.config.enabled_options:
+        if CleaningOption.FIX_ENCODING in self.enabled_options:
             text = self._fix_encoding_issues(text)
         
-        if CleaningOption.REMOVE_DUPLICATES in self.config.enabled_options:
+        if CleaningOption.REMOVE_DUPLICATES in self.enabled_options:
             text = self._remove_duplicate_lines(text)
         
-        if CleaningOption.CLEAN_BULLETS in self.config.enabled_options:
+        if CleaningOption.CLEAN_BULLETS in self.enabled_options:
             text = self._clean_bullets_and_numbering(text)
         
         # Final normalization
@@ -213,7 +165,6 @@ class ContentCleaner:
         """Remove common text artifacts"""
         
         count = 0
-        original_text = text
         
         for pattern, replacement in self.ARTIFACT_PATTERNS:
             new_text = re.sub(pattern, replacement, text)
@@ -445,24 +396,59 @@ class ContentCleaner:
     
     def reset_stats(self):
         """Reset cleaning statistics"""
-        if self.config.collect_stats:
+        if self.collect_stats:
             self.stats = CleaningStats()
 
 
 # Convenience function
-def clean_text(text: str, config: Optional[CleaningConfig] = None) -> str:
+def clean_text(
+    text: str,
+    enabled_options: Optional[Set[CleaningOption]] = None,
+    max_text_length: int = 10_000_000,
+    remove_headers_footers: bool = False,
+    collect_stats: bool = False
+) -> str:
     """
     Convenience function to clean text
     
     Args:
         text: Text to clean
-        config: Optional cleaning configuration
+        enabled_options: Set of CleaningOption enums (default: all except headers)
+        max_text_length: Maximum text length
+        remove_headers_footers: Enable header/footer removal
+        collect_stats: Collect statistics
         
     Returns:
         Cleaned text
     """
-    cleaner = ContentCleaner(config=config)
+    if enabled_options is None:
+        enabled_options = {
+            CleaningOption.REMOVE_ARTIFACTS,
+            CleaningOption.NORMALIZE_WHITESPACE,
+            CleaningOption.FIX_ENCODING,
+            CleaningOption.REMOVE_DUPLICATES,
+            CleaningOption.CLEAN_BULLETS,
+        }
+    
+    cleaner = ContentCleaner(
+        enabled_options=enabled_options,
+        max_text_length=max_text_length,
+        remove_headers_footers=remove_headers_footers,
+        collect_stats=collect_stats
+    )
     return cleaner.clean(text)
+
+def create_content_cleaner(config: PipelineConfig) -> ContentCleaner:
+    """
+    Convenience function to create ContentCleaner with config
+    
+    Args:
+        config: Pipeline configuration
+    
+    Returns:
+        Configured ContentCleaner
+    """
+    return ContentCleaner(config)
 
 
 if __name__ == "__main__":
@@ -496,8 +482,18 @@ if __name__ == "__main__":
         """
     
     # Create cleaner with stats
-    config = CleaningConfig(collect_stats=True)
-    cleaner = ContentCleaner(config=config)
+    enabled_opts = {
+        CleaningOption.REMOVE_ARTIFACTS,
+        CleaningOption.NORMALIZE_WHITESPACE,
+        CleaningOption.FIX_ENCODING,
+        CleaningOption.REMOVE_DUPLICATES,
+        CleaningOption.CLEAN_BULLETS,
+    }
+    
+    cleaner = ContentCleaner(
+        enabled_options=enabled_opts,
+        collect_stats=True
+    )
     
     print("="*60)
     print("ORIGINAL TEXT:")

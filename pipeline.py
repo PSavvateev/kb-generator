@@ -27,6 +27,7 @@ from enum import Enum
 from config import PipelineConfig, LLMProvider, load_env_file
 from services.models import ContentPlan, KBArticle, ArticleMetadata
 from services.document_parser import DocumentParser
+from services.content_cleaner import create_content_cleaner
 from services.analysis_agent import create_analysis_agent
 from services.writing_agent import create_writing_agent
 from services.metadata_agent import create_metadata_agent
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 class PipelineStage(str, Enum):
     """Pipeline stages"""
     PARSING = "parsing"
+    CLEANING = "cleaning" 
     ANALYSIS = "analysis"
     WRITING = "writing"
     METADATA = "metadata"
@@ -145,19 +147,27 @@ class KBPipeline:
         """Initialize all pipeline components"""
         logger.debug("Initializing pipeline components")
         
-        # Document Parser
+        # Document Parser (Stage 1)
         self.parser = DocumentParser()
         logger.debug("✓ Document Parser initialized")
+
+        # Content Cleaner (Stage 2) 
+        if self.config.cleaner.enabled:
+            self.cleaner = create_content_cleaner(self.config)
+            logger.debug("✓ Content Cleaner initialized")
+        else:
+            self.cleaner = None
+            logger.debug("⊘ Content Cleaner disabled")
         
-        # Analysis Agent
+        # Analysis Agent (Stage 3)
         self.analyzer = create_analysis_agent(self.config)
         logger.debug("✓ Analysis Agent initialized")
         
-        # Writing Agent
+        # Writing Agent (Stage 4)
         self.writer = create_writing_agent(self.config)
         logger.debug("✓ Writing Agent initialized")
         
-        # Metadata Agent
+        # Metadata Agent (Stage 5)
         self.metadata_generator = create_metadata_agent(self.config)
         logger.debug("✓ Metadata Agent initialized")
 
@@ -180,22 +190,30 @@ class KBPipeline:
         
         try:
             # Stage 1: Parse Document
-            logger.info("\n[Stage 1/4] Parsing document...")
+            logger.info("\n[Stage 1/5] Parsing document...")
             parsed_result = self._parse_document(document_path)
             logger.info("✓ Document parsed successfully")
+
+            # Stage 2: Clean Content ⭐ ADD THIS ENTIRE BLOCK
+            if self.config.cleaner.enabled:
+                logger.info("\n[Stage 2/5] Cleaning content...")
+                parsed_result = self._clean_content(parsed_result)
+                logger.info("✓ Content cleaned successfully")
+            else:
+                logger.info("\n[Stage 2/5] Cleaning disabled - skipping")
             
-            # Stage 2: Analyze Content
-            logger.info("\n[Stage 2/4] Analyzing content...")
+            # Stage 3: Analyze Content
+            logger.info("\n[Stage 3/5] Analyzing content...")
             content_plan = self._analyze_content(parsed_result)
             logger.info("✓ Content analysis complete")
             
-            # Stage 3: Write Article
-            logger.info("\n[Stage 3/4] Writing KB article...")
+            # Stage 4: Write Article
+            logger.info("\n[Stage 4/5] Writing KB article...")
             article = self._write_article(content_plan, parsed_result)
             logger.info("✓ Article written successfully")
             
             # Stage 4: Generate Metadata
-            logger.info("\n[Stage 4/4] Generating metadata...")
+            logger.info("\n[Stage 5/5] Generating metadata...")
             metadata = self._generate_metadata(article, content_plan, parsed_result)
             logger.info("✓ Metadata generated successfully")
             
@@ -264,8 +282,53 @@ class KBPipeline:
         
         return parsed
     
+    def _clean_content(self, parsed_result: Dict) -> Dict:  # ⭐ ADD THIS METHOD
+        """
+        Stage 2: Clean extracted content
+        
+        Removes artifacts, fixes encoding, normalizes whitespace, etc.
+        """
+        logger.debug("Cleaning extracted content")
+        
+        if not self.cleaner:
+            logger.warning("Cleaner not initialized but cleaning requested")
+            return parsed_result
+        
+        original_text = parsed_result['text']
+        original_length = len(original_text)
+        
+        # Clean the text
+        cleaned_text = self.cleaner.clean(original_text)
+        cleaned_length = len(cleaned_text)
+        
+        # Calculate reduction
+        reduction = original_length - cleaned_length
+        reduction_pct = (reduction / original_length * 100) if original_length > 0 else 0
+        
+        logger.debug(f"Text cleaned: {original_length:,} → {cleaned_length:,} chars")
+        logger.debug(f"Reduction: {reduction:,} chars ({reduction_pct:.1f}%)")
+        
+        # Log statistics if enabled
+        if self.config.cleaner.collect_stats:
+            stats = self.cleaner.get_stats()
+            if stats:
+                logger.info("Cleaning statistics:")
+                logger.info(f"  Artifacts removed: {stats.artifacts_removed}")
+                logger.info(f"  Encoding fixes: {stats.encoding_fixes}")
+                logger.info(f"  Duplicates removed: {stats.duplicates_removed}")
+                logger.info(f"  Lines removed: {stats.lines_removed}")
+        
+        # Update parsed result with cleaned text
+        parsed_result['text'] = cleaned_text
+        
+        # Validate cleaned result
+        if not cleaned_text.strip():
+            raise ValueError("Cleaned text is empty - cleaning may have been too aggressive")
+        
+        return parsed_result
+    
     def _analyze_content(self, parsed_result: Dict) -> ContentPlan:
-        """Stage 2: Analyze content and create plan"""
+        """Stage 3: Analyze content and create plan"""
         content_plan = self.analyzer.analyze(parsed_result)
         
         # Validate content plan
@@ -279,7 +342,7 @@ class KBPipeline:
         return content_plan
     
     def _write_article(self, content_plan: ContentPlan, parsed_result: Dict) -> KBArticle:
-        """Stage 3: Write KB article"""
+        """Stage 4: Write KB article"""
         article = self.writer.write(
             content_plan=content_plan,
             parsed_result=parsed_result
@@ -302,7 +365,7 @@ class KBPipeline:
         content_plan: ContentPlan,
         parsed_result: Dict
     ) -> ArticleMetadata:
-        """Stage 4: Generate metadata"""
+        """Stage 5: Generate metadata"""
         metadata = self.metadata_generator.generate(
             article=article,
             content_plan=content_plan,
@@ -572,6 +635,9 @@ Examples:
   python pipeline.py docs/ --directory
   python pipeline.py document.pdf --output my_kb --author "John Doe"
   python pipeline.py document.pdf --verbose
+  python pipeline.py document.pdf --no-cleaning  
+  python pipeline.py document.pdf --remove-headers  
+  python pipeline.py document.pdf --cleaning-stats  
         """
     )
     
@@ -592,6 +658,15 @@ Examples:
     parser.add_argument('--extensions', nargs='+',
                        help='File extensions to process')
     
+    parser.add_argument('--no-cleaning', action='store_true',
+                       help='Disable content cleaning stage')
+    parser.add_argument('--remove-headers', action='store_true',
+                       help='Enable header/footer removal (aggressive)')
+    parser.add_argument('--cleaning-stats', action='store_true',
+                       help='Collect and display cleaning statistics')
+    
+
+    
     args = parser.parse_args()
     
     # Create configuration
@@ -607,6 +682,10 @@ Examples:
         config.output.author = args.author
     if args.version:
         config.output.version = args.version
+
+    config.cleaner.enabled = not args.no_cleaning
+    config.cleaner.remove_headers_footers = args.remove_headers
+    config.cleaner.collect_stats = args.cleaning_stats
     
     # Create pipeline
     pipeline = KBPipeline(config)
