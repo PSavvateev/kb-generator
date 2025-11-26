@@ -32,6 +32,7 @@ It is common for a company to have a large knowledge base documented in differen
 ### Key benefits
 - **Save Time**: Convert hours of manual KB article writing into minutes of automated processing
 - **Consistency**: Ensure uniform structure, tone, and quality across all articles
+- **Clean Content**: Automatically fix encoding issues, remove artifacts, and normalize formatting
 - **Rich Metadata**: Automatically generate metadata, tags, and keywords
 - **Multi-format Support**: Process PDFs, DOCX, and TXT files
 - **Table Preservation**: Accurately extract and format tables with intelligent validation
@@ -47,20 +48,28 @@ It is common for a company to have a large knowledge base documented in differen
    - Intelligent table validation to filter malformed extractions
    - Preserve document structure and formatting
 
-2. **Content Analysis**
+2. **Content Cleaning**
+   - Fix encoding issues (smart quotes, mojibake, UTF-8 errors)
+   - Remove artifacts (form feeds, control characters, zero-width spaces)
+   - Normalize whitespace and line breaks
+   - Remove duplicate lines
+   - Standardize bullet points and numbering
+   - Optional header/footer removal
+
+3. **Content Analysis**
    - AI-powered document type detection (tutorial, reference, how-to, troubleshooting, etc.)
    - Automatic section identification and outlining
    - Table placement recommendations
    - Target audience identification
 
-3. **Article Generation**
+4. **Article Generation**
    - Professional markdown article creation
    - Proper heading hierarchy and structure
    - Clean table formatting
    - Source attribution
    - Configurable tone and style
 
-4. **Metadata Generation**
+5. **Metadata Generation**
    - SEO-optimized titles and descriptions
    - Relevant tags and keywords
    - Difficulty level assessment
@@ -101,7 +110,20 @@ It is common for a company to have a large knowledge base documented in differen
                │
                ▼
     ┌─────────────────────┐
-    │ Stage 2: ANALYSIS   │
+    │ Stage 2: CLEANING   │
+    │  Content Cleaner    │
+    │  • Fix encoding     │
+    │  • Remove artifacts │
+    │  • Normalize text   │
+    │  • Remove dupes     │
+    └──────────┬──────────┘
+               │
+               ▼
+       Clean Text + Tables
+               │
+               ▼
+    ┌─────────────────────┐
+    │ Stage 3: ANALYSIS   │
     │  Analysis Agent     │
     │  • Detect doc type  │
     │  • Identify sections│
@@ -114,7 +136,7 @@ It is common for a company to have a large knowledge base documented in differen
                │
                ▼
     ┌─────────────────────┐
-    │ Stage 3: WRITING    │
+    │ Stage 4: WRITING    │
     │  Writing Agent      │
     │  • Generate article │
     │  • Format markdown  │
@@ -127,7 +149,7 @@ It is common for a company to have a large knowledge base documented in differen
                │
                ▼
     ┌─────────────────────┐
-    │ Stage 4: METADATA   │
+    │ Stage 5: METADATA   │
     │  Metadata Agent     │
     │  • Generate title   │
     │  • Create tags      │
@@ -162,7 +184,33 @@ Extracts content from various file formats with robust table validation.
 - Preserves document order in DOCX files
 - Encoding detection for text files
 
-#### 2. **Analysis Agent** (`services/analysis_agent.py`)
+#### 2. **Content Cleaner** (`services/content_cleaner.py`)
+Cleans and normalizes extracted text for optimal LLM processing.
+
+**Responsibilities:**
+- Fix encoding issues (UTF-8 mojibake, smart quotes, Latin-1 issues)
+- Remove artifacts (form feeds, control characters, BOM, zero-width spaces)
+- Normalize whitespace and line breaks
+- Remove consecutive duplicate lines
+- Standardize bullet points and list formatting
+- Optional removal of page headers/footers
+
+**Key Features:**
+- Comprehensive encoding fix database (80+ patterns)
+- Configurable cleaning options
+- Statistics tracking for debugging
+- Conservative defaults to preserve content
+- Non-destructive cleaning (validates output)
+
+**What Gets Cleaned:**
+- **Encoding Issues**: `â€™` → `'`, `Ã©` → `é`, `â€œ` → `"`
+- **Artifacts**: Form feeds, control characters, zero-width spaces, BOM
+- **Whitespace**: Multiple spaces → single space, max 2 consecutive newlines
+- **Bullets**: `•▪▫▸▹` → `•` (normalized)
+- **Duplicates**: Consecutive identical lines removed
+- **Optional**: Page headers/footers ("Page X of Y")
+
+#### 3. **Analysis Agent** (`services/analysis_agent.py`)
 AI-powered content analysis and structure planning.
 
 **Responsibilities:**
@@ -179,7 +227,7 @@ AI-powered content analysis and structure planning.
 - Table-to-section mapping
 - Content style detection
 
-#### 3. **Writing Agent** (`services/writing_agent.py`)
+#### 4. **Writing Agent** (`services/writing_agent.py`)
 Generates professional markdown articles from content plans.
 
 **Responsibilities:**
@@ -197,7 +245,7 @@ Generates professional markdown articles from content plans.
 - Table integration
 - Source citation
 
-#### 4. **Metadata Agent** (`services/metadata_agent.py`)
+#### 5. **Metadata Agent** (`services/metadata_agent.py`)
 Creates comprehensive metadata for SEO and discoverability.
 
 **Responsibilities:**
@@ -216,7 +264,7 @@ Creates comprehensive metadata for SEO and discoverability.
 - Prerequisite identification
 - Comprehensive tagging
 
-#### 5. **LLM Client** (`services/llm_client.py`)
+#### 6. **LLM Client** (`services/llm_client.py`)
 Unified interface for multiple AI providers.
 
 **Responsibilities:**
@@ -227,7 +275,7 @@ Unified interface for multiple AI providers.
 - Manage rate limits
 
 **Supported Providers:**
-- **Google Gemini** (gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash-exp)
+- **Google Gemini** (gemini-2.5-flash, gemini-1.5-pro)
 - **OpenAI** (gpt-4o, gpt-4o-mini, o1-mini, o1-preview)
 - **Anthropic Claude** (claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022, claude-3-opus)
 - **Ollama** (local models: llama3.1, qwen2.5, mistral, etc.)
@@ -245,6 +293,7 @@ kb-generator/
 │   ├── __init__.py
 │   ├── models.py           # Data models and domain enums
 │   ├── document_parser.py  # Document parsing & table extraction
+│   ├── content_cleaner.py  # Text cleaning & normalization
 │   ├── analysis_agent.py   # Content analysis & planning
 │   ├── writing_agent.py    # Article generation
 │   ├── metadata_agent.py   # Metadata generation
@@ -370,7 +419,7 @@ load_env_file()
 # Create and customize configuration
 config = PipelineConfig()
 config.llm.provider = LLMProvider.GOOGLE
-config.llm.model = "gemini-1.5-flash"
+config.llm.model = "gemini-2.5-flash"
 config.output.output_dir = "my-kb"
 config.output.author = "Your Name"
 config.verbose = True
@@ -392,7 +441,7 @@ Control which AI provider and model to use:
 config.llm.provider = LLMProvider.GOOGLE  # or OPENAI, ANTHROPIC, OLLAMA
 
 # Optionally specify model (uses smart defaults if not set)
-config.llm.model = "gemini-1.5-flash"
+config.llm.model = "gemini-2.5-flash"
 
 # Control generation parameters
 config.llm.temperature = 0.7        # Creativity (0.0-1.0)
@@ -405,7 +454,7 @@ config.llm.max_retries = 3          # Retry failed requests
 
 | Provider | Default Model | Best For |
 |----------|---------------|----------|
-| **Google** | `gemini-1.5-flash` | Speed & cost-effectiveness |
+| **Google** | `gemini-2.5-flash` | Speed & cost-effectiveness |
 | **OpenAI** | `gpt-4o-mini` | Quality & reliability |
 | **Anthropic** | `claude-3-5-haiku-20241022` | Best quality output |
 | **Ollama** | `llama3.1:8b` | Local/offline processing |
@@ -497,21 +546,73 @@ config.parser.max_empty_cell_ratio = 0.6  # Max 60% empty cells
 
 ---
 
+#### 5. Cleaner Configuration
+
+Control content cleaning behavior:
+```python
+# Enable/disable cleaning stage
+config.cleaner.enabled = True  # Default: True
+
+# Control individual cleaning operations
+config.cleaner.remove_artifacts = True        # Remove control chars, form feeds
+config.cleaner.normalize_whitespace = True    # Normalize spaces and newlines
+config.cleaner.fix_encoding = True            # Fix mojibake and smart quotes
+config.cleaner.remove_duplicates = True       # Remove duplicate lines
+config.cleaner.clean_bullets = True           # Normalize bullet points
+config.cleaner.remove_headers_footers = False # Remove page headers (aggressive)
+
+# Statistics and limits
+config.cleaner.collect_stats = False          # Track cleaning statistics
+config.cleaner.max_text_length = 10_000_000   # 10MB text limit
+```
+
+**When to Adjust Cleaner Settings:**
+
+| Scenario | Setting | Reason |
+|----------|---------|--------|
+| Legacy PDFs with page numbers | `remove_headers_footers = True` | Strip "Page X of Y" |
+| Already clean documents | `enabled = False` | Skip cleaning for speed |
+| Debugging cleaning issues | `collect_stats = True` | See what's being cleaned |
+| Preserve original formatting | Set individual flags to `False` | Selective cleaning |
+
+**Via Command Line:**
+```bash
+# Disable cleaning entirely
+python pipeline.py document.pdf --no-cleaning
+
+# Enable header/footer removal (aggressive)
+python pipeline.py document.pdf --remove-headers
+
+# See cleaning statistics
+python pipeline.py document.pdf --cleaning-stats --verbose
+```
+
+---
+
 ### Preset Configurations
 
 Use pre-configured setups for common scenarios:
 ```python
 from config import (
-    get_production_config,    # Google Gemini - fast & cost-effective
-    get_quality_config,       # Claude Sonnet - best quality
-    get_development_config,   # Ollama - local testing
-    get_fast_config           # Gemini Flash - quick testing
+    get_production_config,    # Google Gemini - fast, cleaning enabled
+    get_quality_config,       # Claude Sonnet - best quality, stats enabled
+    get_development_config,   # Ollama - local testing, full stats
+    get_fast_config           # Gemini Flash - quick, aggressive cleaning
 )
 
 # Use a preset
 config = get_production_config()
 pipeline = KBPipeline(config)
 ```
+
+**Preset Details:**
+
+| Preset | Provider | Cleaning | Header Removal | Stats | Use Case |
+|--------|----------|----------|----------------|-------|----------|
+| `production` | Google | ✅ Enabled | ❌ No | ❌ No | Production use |
+| `quality` | Anthropic | ✅ Enabled | ❌ No | ✅ Yes | High-quality output |
+| `development` | Ollama | ✅ Enabled | ❌ No | ✅ Yes | Local testing |
+| `fast` | Google | ✅ Enabled | ✅ Yes | ❌ No | Quick processing |
 
 ---
 
@@ -544,6 +645,11 @@ config.agent.metadata_max_tags = 15
 
 # Parser settings
 config.parser.strict_table_validation = True
+
+# Cleaner settings
+config.cleaner.enabled = True
+config.cleaner.remove_headers_footers = True
+config.cleaner.collect_stats = True
 
 # Pipeline settings
 config.verbose = True
@@ -585,6 +691,13 @@ KB GENERATOR CONFIGURATION
   Extract Tables: True
   Strict Validation: True
 
+🧹 Cleaner Configuration:
+  Enabled: True
+  Remove Artifacts: True
+  Fix Encoding: True
+  Remove Headers/Footers: True
+  Collect Stats: True
+
 💾 Output Configuration:
   Output Directory: knowledge-base
   Author: Documentation Team
@@ -609,6 +722,9 @@ KB GENERATOR CONFIGURATION
 | `output.author` | `None` | Any string | Article author |
 | `agent.writing_tone` | `professional` | `professional`, `casual`, `technical` | Writing style |
 | `parser.extract_tables` | `True` | `True`, `False` | Extract tables |
+| `cleaner.enabled` | `True` | `True`, `False` | Enable content cleaning |
+| `cleaner.fix_encoding` | `True` | `True`, `False` | Fix encoding issues |
+| `cleaner.remove_headers_footers` | `False` | `True`, `False` | Remove page headers |
 
 For complete configuration options, see `config.py`.
 
@@ -625,10 +741,11 @@ python pipeline.py path/to/document.pdf
 
 This will:
 1. Parse the document
-2. Analyze content and create a plan
-3. Generate a markdown article
-4. Create metadata
-5. Save outputs to `outputs/<document-name>/`
+2. Clean the extracted content (fix encoding, remove artifacts)
+3. Analyze content and create a plan
+4. Generate a markdown article
+5. Create metadata
+6. Save outputs to `outputs/<document-name>/`
 
 ### Specify LLM provider
 
@@ -637,7 +754,7 @@ This will:
 python pipeline.py document.pdf --provider google
 
 # Specify model
-python pipeline.py document.pdf --provider google --model gemini-1.5-pro
+python pipeline.py document.pdf --provider google --model gemini-2.5-flash
 ```
 
 #### Using OpenAI
@@ -692,6 +809,22 @@ Process specific file types:
 python pipeline.py documents/ --directory --extensions .pdf .docx
 ```
 
+### Content cleaning options
+
+```bash
+# Disable cleaning (for already clean documents)
+python pipeline.py document.pdf --no-cleaning
+
+# Enable aggressive header/footer removal
+python pipeline.py document.pdf --remove-headers
+
+# See detailed cleaning statistics
+python pipeline.py document.pdf --cleaning-stats --verbose
+
+# Combine cleaning options
+python pipeline.py document.pdf --remove-headers --cleaning-stats
+```
+
 ### Advanced options
 ```bash
 # Control output files
@@ -714,6 +847,8 @@ python pipeline.py \
   --output kb-articles \
   --author "Documentation Team" \
   --version "1.0" \
+  --remove-headers \
+  --cleaning-stats \
   --verbose
 ```
 
@@ -882,6 +1017,45 @@ pip install -r requirements.txt --upgrade
 ```
 - Use `print_config(config)` to verify settings
 - Check that `.env` file is loaded: `load_env_file()`
+
+#### 9. **Cleaning seems too aggressive** 
+**Problem:** Content is being removed or over-normalized.
+
+**Solution:**
+```bash
+# Disable cleaning entirely
+python pipeline.py document.pdf --no-cleaning
+
+# Or disable specific operations programmatically
+config.cleaner.remove_headers_footers = False
+config.cleaner.remove_duplicates = False
+```
+
+#### 10. **Want to see what's being cleaned** 
+**Problem:** Need to verify cleaning is working correctly.
+
+**Solution:**
+```bash
+# Enable statistics
+python pipeline.py document.pdf --cleaning-stats --verbose
+```
+
+**Output will show:**
+```
+[Stage 2/5] Cleaning content...
+Cleaned 15,234 → 14,987 chars
+Applied: 12 encoding fixes, 3 duplicates, 5 artifacts
+✓ Content cleaned successfully
+```
+
+#### 11. **Encoding issues in final article** 
+**Problem:** Still seeing `â€™` or `Ã©` in output.
+
+**Solution:**
+- Cleaning should be enabled by default
+- Check if cleaning is disabled: `python pipeline.py document.pdf --verbose` (should show Stage 2)
+- Try processing with stats: `python pipeline.py document.pdf --cleaning-stats --verbose`
+- If issues persist, the encoding may be in a non-standard format
 
 ---
 
